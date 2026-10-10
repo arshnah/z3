@@ -150,6 +150,45 @@ export interface MuzzaExportStats {
     bytes: number;
 }
 
+/**
+ * An INSERT for `table` that adapts to the columns the table actually has. When
+ * exporting on top of an imported backup, the database comes from whatever
+ * Muzza version the user had, and its schema can differ from ours (older
+ * versions lack e.g. `song.contentUri`). Columns the table doesn't have are
+ * dropped; NOT NULL columns we don't know about get a neutral default.
+ */
+function adaptiveInsert(db: any, table: string, verb: 'INSERT' | 'INSERT OR IGNORE' | 'INSERT OR REPLACE') {
+    const columns = db.prepare(`PRAGMA table_info(\`${table}\`)`).all() as {
+        name: string;
+        type: string;
+        notnull: number;
+        dflt_value: unknown;
+        pk: number;
+    }[];
+    if (!columns.length) throw new Error(`The Muzza database has no "${table}" table.`);
+    const statements = new Map<string, any>();
+
+    return (row: Record<string, unknown>) => {
+        const values: Record<string, unknown> = {};
+        for (const column of columns) {
+            if (column.name in row) values[column.name] = row[column.name];
+            else if (column.notnull && column.dflt_value == null && !column.pk) {
+                values[column.name] = /INT|REAL|NUM|BOOL/i.test(column.type) ? 0 : '';
+            }
+        }
+        const names = Object.keys(values);
+        const key = names.join(',');
+        let statement = statements.get(key);
+        if (!statement) {
+            statement = db.prepare(
+                `${verb} INTO \`${table}\` (${names.map((n) => `\`${n}\``).join(', ')}) VALUES (${names.map(() => '?').join(', ')})`,
+            );
+            statements.set(key, statement);
+        }
+        return statement.run(...names.map((n) => values[n] ?? null));
+    };
+}
+
 /** Build a Muzza-compatible `.backup` archive. Returns the zip bytes + stats. */
 export async function buildMuzzaBackup(
     input: MuzzaExportInput,
@@ -182,21 +221,12 @@ export async function buildMuzzaBackup(
             const now = Date.now();
 
             const songExists = db.prepare('SELECT 1 AS x FROM song WHERE id = ?');
-            const insertSong = db.prepare(
-                'INSERT OR IGNORE INTO song (id, title, duration, thumbnailUrl, albumId, albumName, liked, totalPlayTime, inLibrary, dateDownload, artistName, isLocal, localPath, contentUri, isVideoSong, explicit) ' +
-                    'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-            );
+            const insertSong = adaptiveInsert(db, 'song', 'INSERT OR IGNORE');
             const updateLiked = db.prepare('UPDATE song SET liked = ? WHERE id = ?');
             const findArtist = db.prepare('SELECT id AS id FROM artist WHERE name = ? LIMIT 1');
-            const insertArtist = db.prepare(
-                'INSERT OR REPLACE INTO artist (id, name, thumbnailUrl, channelId, lastUpdateTime, bookmarkedAt, isProfile) VALUES (?, ?, ?, ?, ?, ?, ?)',
-            );
-            const insertSongArtist = db.prepare(
-                'INSERT OR IGNORE INTO song_artist_map (songId, artistId, position) VALUES (?, ?, ?)',
-            );
-            const insertLyrics = db.prepare(
-                "INSERT OR REPLACE INTO lyrics (id, lyrics, provider) VALUES (?, ?, 'Zeta')",
-            );
+            const insertArtist = adaptiveInsert(db, 'artist', 'INSERT OR REPLACE');
+            const insertSongArtist = adaptiveInsert(db, 'song_artist_map', 'INSERT OR IGNORE');
+            const insertLyrics = adaptiveInsert(db, 'lyrics', 'INSERT OR REPLACE');
 
             const artistIds = new Map<string, string>(); // name -> LA id
             let likedCount = 0;
@@ -207,29 +237,29 @@ export async function buildMuzzaBackup(
                 const liked = input.likedIds.has(song.id) ? 1 : 0;
                 if (liked) likedCount++;
 
-                if (song.lyrics) insertLyrics.run(muzzaId, song.lyrics);
+                if (song.lyrics) insertLyrics({ id: muzzaId, lyrics: song.lyrics, provider: 'Zeta' });
 
                 // Only insert songs missing from the (base) DB — this preserves the
                 // stats/history of songs Muzza already knew about.
                 if (!songExists.get(muzzaId)) {
-                    insertSong.run(
-                        muzzaId,
-                        song.title || 'Untitled',
-                        Math.max(0, Math.round(song.duration || 0)),
-                        bestThumbnailUrl(song.thumbnails),
-                        null,
-                        song.album?.title ?? null,
+                    insertSong({
+                        id: muzzaId,
+                        title: song.title || 'Untitled',
+                        duration: Math.max(0, Math.round(song.duration || 0)),
+                        thumbnailUrl: bestThumbnailUrl(song.thumbnails),
+                        albumId: null,
+                        albumName: song.album?.title ?? null,
                         liked,
-                        0,
-                        now, // inLibrary
-                        song.isDownloaded ? now : null,
-                        song.artists.map((a) => a.name).join(', ') || null,
+                        totalPlayTime: 0,
+                        inLibrary: now,
+                        dateDownload: song.isDownloaded ? now : null,
+                        artistName: song.artists.map((a) => a.name).join(', ') || null,
                         isLocal,
-                        null,
-                        null,
-                        0,
-                        0,
-                    );
+                        localPath: null,
+                        contentUri: null,
+                        isVideoSong: 0,
+                        explicit: 0,
+                    });
 
                     song.artists.forEach((artist, position) => {
                         const key = artist.name.trim().toLowerCase();
@@ -239,10 +269,19 @@ export async function buildMuzzaBackup(
                             const found = findArtist.get(artist.name) as { id: string } | undefined;
                             artistId = found?.id ?? randomId('LA');
                             artistIds.set(key, artistId);
-                            if (!found)
-                                insertArtist.run(artistId, artist.name, bestThumbnailUrl(artist.thumbnails), null, now, null, 0);
+                            if (!found) {
+                                insertArtist({
+                                    id: artistId,
+                                    name: artist.name,
+                                    thumbnailUrl: bestThumbnailUrl(artist.thumbnails),
+                                    channelId: null,
+                                    lastUpdateTime: now,
+                                    bookmarkedAt: null,
+                                    isProfile: 0,
+                                });
+                            }
                         }
-                        insertSongArtist.run(muzzaId, artistId, position);
+                        insertSongArtist({ songId: muzzaId, artistId, position });
                     });
                 }
 
@@ -253,48 +292,45 @@ export async function buildMuzzaBackup(
             // Rebuild playlists entirely from Zeta (authoritative for structure).
             db.exec('DELETE FROM playlist_song_map');
             db.exec('DELETE FROM playlist');
-            const insertPlaylist = db.prepare(
-                'INSERT INTO playlist (id, name, browseId, playlistAuthorsId, playlistAuthorName, playlistAuthorAvatarUrl, createdAt, lastUpdateTime, isEditable, bookmarkedAt, remoteSongCount, playEndpointParams, thumbnailUrl, shuffleEndpointParams, radioEndpointParams, description, isLocal) ' +
-                    'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-            );
-            const insertPlaylistSong = db.prepare(
-                'INSERT INTO playlist_song_map (playlistId, songId, position, setVideoId) VALUES (?, ?, ?, ?)',
-            );
+            const insertPlaylist = adaptiveInsert(db, 'playlist', 'INSERT');
+            const insertPlaylistSong = adaptiveInsert(db, 'playlist_song_map', 'INSERT');
 
             let playlistCount = 0;
             for (const playlist of input.playlists) {
                 const playlistId = randomId('LP');
-                insertPlaylist.run(
-                    playlistId,
-                    playlist.name,
-                    null, null, null, null,
-                    playlist.createdAt || now,
-                    now,
-                    1, // isEditable
-                    now, // bookmarkedAt -> shows in Muzza library
-                    null, null, null, null, null, null,
-                    0,
-                );
+                insertPlaylist({
+                    id: playlistId,
+                    name: playlist.name,
+                    createdAt: playlist.createdAt || now,
+                    lastUpdateTime: now,
+                    isEditable: 1,
+                    bookmarkedAt: now, // shows in the Muzza library
+                    isLocal: 0,
+                });
                 playlist.trackIds.forEach((zetaId, position) => {
                     if (songExists.get(toMuzzaId(zetaId))) {
-                        insertPlaylistSong.run(playlistId, toMuzzaId(zetaId), position, null);
+                        insertPlaylistSong({ playlistId, songId: toMuzzaId(zetaId), position, setVideoId: null });
                     }
                 });
                 playlistCount++;
             }
 
             // Append Zeta's play events to the history, then recompute play totals.
-            const insertEvent = db.prepare('INSERT INTO event (songId, timestamp, playTime) VALUES (?, ?, ?)');
+            const insertEvent = adaptiveInsert(db, 'event', 'INSERT');
             for (const ev of input.events ?? []) {
                 const muzzaId = toMuzzaId(ev.zetaId);
                 if (!songExists.get(muzzaId)) continue;
-                insertEvent.run(muzzaId, Math.round(ev.timestamp), Math.max(0, Math.round(ev.playTimeMs)));
+                insertEvent({ songId: muzzaId, timestamp: Math.round(ev.timestamp), playTime: Math.max(0, Math.round(ev.playTimeMs)) });
             }
             db.exec(
                 'UPDATE song SET totalPlayTime = COALESCE((SELECT SUM(playTime) FROM event WHERE event.songId = song.id), 0)',
             );
 
             if (!fromBase) db.exec(`PRAGMA user_version = ${MUZZA_DB_VERSION}`);
+            // Declare the schema version the database actually has: an imported
+            // base keeps its own (possibly older) one, and Muzza relies on this to
+            // run its migrations on restore.
+            const dbVersion = Number((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version) || MUZZA_DB_VERSION;
             db.close();
 
             const dbBytes = readFileSync(dbPath);
@@ -302,7 +338,7 @@ export async function buildMuzzaBackup(
             const { default: JSZip } = await import('jszip');
             const zip = new JSZip();
             zip.file(DB_ENTRY, dbBytes);
-            zip.file(METADATA_ENTRY, `db_version=${MUZZA_DB_VERSION}\n`);
+            zip.file(METADATA_ENTRY, `db_version=${dbVersion}\n`);
             // Preserve Muzza's settings blob verbatim when we have one.
             if (input.base?.settings) zip.file(SETTINGS_ENTRY, input.base.settings);
             const data = await zip.generateAsync({

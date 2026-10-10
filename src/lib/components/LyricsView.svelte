@@ -300,8 +300,14 @@
         --wp: 0%;
         white-space: pre-wrap;
     }
+    /* The soft edge spans [wp*1.1 - 10%, wp*1.1]: entirely before the word at 0%
+       (no white on unsung words) and entirely past it at 100% (fully white). */
     .line.active .word {
-        background: linear-gradient(90deg, #fff var(--wp), rgb(255 255 255 / 0.32) calc(var(--wp) + 8%));
+        background: linear-gradient(
+            90deg,
+            #fff calc(var(--wp) * 1.1 - 10%),
+            rgb(255 255 255 / 0.32) calc(var(--wp) * 1.1)
+        );
         -webkit-background-clip: text;
         background-clip: text;
         color: transparent;

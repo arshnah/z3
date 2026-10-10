@@ -288,26 +288,23 @@
         width: 100%;
         margin: 0 auto;
     }
+    /* The whole column is exactly as wide as the cover (which is capped by the
+       window height), so the title, seek bar and buttons line up with it. */
     .left {
         display: flex;
         flex-direction: column;
         justify-content: center;
         gap: 22px;
         min-width: 0;
-        max-width: 480px;
-        width: 100%;
+        width: min(100%, 480px, max(280px, 48vh));
         justify-self: end;
     }
     .art-slot {
         width: 100%;
-        max-height: 48vh;
-        max-width: 48vh;
     }
     .art {
         width: 100%;
         aspect-ratio: 1;
-        max-height: 48vh;
-        max-width: 48vh;
         border-radius: var(--r-lg);
         box-shadow: 0 40px 80px -20px rgb(0 0 0 / 0.65), 0 12px 30px rgb(0 0 0 / 0.3);
         transition: transform 0.7s var(--ease-spring), box-shadow 0.7s;

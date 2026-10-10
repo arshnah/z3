@@ -1,4 +1,4 @@
-import { Innertube, Platform, type Types } from 'youtubei.js';
+import { Innertube, Parser, Platform, type Types } from 'youtubei.js';
 import { Song as Saavn } from '@saavn-labs/sdk';
 
 import { readFileSync, writeFileSync } from 'node:fs';
@@ -117,6 +117,16 @@ async function init() {
 }
 
 Platform.shim.eval = async (data: Types.BuildScriptResult) => new Function(data.output)();
+
+// youtubei.js's default parser-warning handler reads `bugs.url` from its own
+// package.json, a field electron-builder strips when packaging. So in the
+// installed app, any YouTube response containing something the parser doesn't
+// recognise (it varies by region/experiment) threw "Cannot read properties of
+// undefined (reading 'url')" and broke streaming. These are only warnings:
+// handle them ourselves.
+Parser.setParserErrorHandler((context: { classname?: string; error_type?: string; error?: unknown }) => {
+    log(`[youtubei] parser ${context.error_type ?? 'warning'} at ${context.classname ?? '?'}`, context.error ?? '');
+});
 
 /* -------------------------------------------------------------------------- */
 /*                                  helpers                                   */
