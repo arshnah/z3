@@ -673,6 +673,120 @@ async function migrateLegacyFiles(): Promise<void> {
 /* ------------------------------ lyrics sources ---------------------------- */
 
 const LRCLIB_HEADERS = { 'User-Agent': 'Zeta Music (https://github.com/zeta-zx/z3)' };
+
+/* NetEase Cloud Music: word-by-word ("yrc") lyrics for many popular songs. */
+
+const NETEASE_HEADERS = { 'User-Agent': 'Mozilla/5.0', Referer: 'https://music.163.com/' };
+
+/** Lowercase letters/digits only, without "(feat. …)", "[Remix]" and the like. */
+function comparable(s: string): string {
+    return s
+        .toLowerCase()
+        .replace(/\(.*?\)|\[.*?\]/g, '')
+        .replace(/[^\p{L}\p{N}]+/gu, '');
+}
+
+/** `[mm:ss.xxx]`-style timestamp body for enhanced LRC. */
+function lrcTime(ms: number): string {
+    const total = Math.max(0, ms) / 1000;
+    const m = Math.floor(total / 60);
+    const s = (total - m * 60).toFixed(3).padStart(6, '0');
+    return `${String(m).padStart(2, '0')}:${s}`;
+}
+
+/**
+ * Word-synced lyrics from NetEase, as enhanced LRC:
+ * `[mm:ss.xxx]<mm:ss.xxx>word <mm:ss.xxx>word <mm:ss.xxx>` (a trailing or
+ * mid-line tag followed by no text marks where the previous word ends).
+ *
+ * Only accepted when title, artist and duration all match, so we never apply
+ * one version's timings to another (e.g. a radio edit vs the album cut).
+ */
+async function fetchNeteaseWordLyrics(track: Song): Promise<string | null> {
+    const title = comparable(track.title);
+    const artists = track.artists.map((a) => comparable(a.name)).filter(Boolean);
+    if (!title) return null;
+
+    const query = `${track.title.replace(/\(.*?\)|\[.*?\]/g, '')} ${track.artists[0]?.name ?? ''}`.trim();
+    const search = (await (
+        await fetch(`https://music.163.com/api/search/get?${new URLSearchParams({ s: query, type: '1', limit: '10' })}`, {
+            headers: NETEASE_HEADERS,
+            signal: AbortSignal.timeout(6000),
+        })
+    ).json()) as any;
+
+    const hit = ((search?.result?.songs ?? []) as any[]).find((s) => {
+        if (comparable(String(s.name ?? '')) !== title) return false;
+        const theirs = ((s.artists ?? []) as any[]).map((a) => comparable(String(a.name ?? '')));
+        if (artists.length && !artists.some((a) => theirs.some((t) => t && (t.includes(a) || a.includes(t))))) return false;
+        return !track.duration || Math.abs(Number(s.duration) / 1000 - track.duration) <= 4;
+    });
+    if (!hit) return null;
+
+    const lyric = (await (
+        await fetch(`https://music.163.com/api/song/lyric/v1?id=${hit.id}&lv=1&yv=1`, {
+            headers: NETEASE_HEADERS,
+            signal: AbortSignal.timeout(6000),
+        })
+    ).json()) as any;
+    const yrc: string = lyric?.yrc?.lyric ?? '';
+    if (!yrc) return null;
+
+    // NetEase's plain line-by-line version of the same lyrics, used as a
+    // spelling reference: the word-timed data occasionally drops the space
+    // between two words ("how" + "to"), while splitting one word into timed
+    // syllables is legitimate. Only the reference can tell them apart.
+    const reference = new Map<number, string>();
+    for (const raw of String(lyric?.lrc?.lyric ?? '').split('\n')) {
+        const m = raw.match(/^\[(\d+):(\d+(?:\.\d+)?)\](.*)$/);
+        if (m && m[3].trim()) reference.set(Math.round((Number(m[1]) * 60 + Number(m[2])) * 1000), m[3].trim());
+    }
+    const referenceFor = (startMs: number, text: string): string | null => {
+        const squash = (s: string) => s.replace(/\s+/g, '');
+        for (const [ms, ref] of reference) if (Math.abs(ms - startMs) < 800 && squash(ref) === squash(text)) return ref;
+        return null;
+    };
+
+    const lines: string[] = [];
+    for (const raw of yrc.split('\n')) {
+        // [lineStartMs,lineDurMs](wordStartMs,wordDurMs,0)word(…)word
+        const head = raw.match(/^\[(\d+),(\d+)\](.*)$/);
+        if (!head) continue; // metadata lines are JSON, not [..] lines
+        const words = [...head[3].matchAll(/\((\d+),(\d+),\d+\)([^(]*)/g)].map((m) => ({
+            start: Number(m[1]),
+            end: Number(m[1]) + Number(m[2]),
+            text: m[3],
+        }));
+        const text = words.map((w) => w.text).join('').trim();
+        if (!text) continue;
+        // Credit lines ("作词 : …", "制作：…") aren't lyrics.
+        if (/^[^:：]{0,14}[:：]/.test(text) && /[\u4e00-\u9fff]/.test(text.split(/[:：]/)[0])) continue;
+
+        // Restore spaces the word data dropped, following the reference text.
+        const ref = referenceFor(Number(head[1]), text);
+        if (ref) {
+            let at = 0; // position in ref
+            for (const w of words) {
+                for (const ch of w.text) {
+                    if (/\s/.test(ch)) continue;
+                    while (at < ref.length && /\s/.test(ref[at])) at++;
+                    at++;
+                }
+                if (/\s/.test(ref[at] ?? '') && !/\s$/.test(w.text)) w.text += ' ';
+            }
+        }
+
+        let line = `[${lrcTime(Number(head[1]))}]`;
+        words.forEach((w, i) => {
+            line += `<${lrcTime(w.start)}>${w.text}`;
+            const next = words[i + 1];
+            // Mark where a word ends when it's followed by a pause (or ends the line).
+            if (!next || next.start - w.end > 250) line += `<${lrcTime(w.end)}>`;
+        });
+        lines.push(line);
+    }
+    return lines.length >= 4 ? lines.join('\n') : null;
+}
 const SYNCED_LRC = /\[\d{1,2}:\d{2}(?:[.:]\d{1,3})?\]/; // looks like [mm:ss.xx]
 
 /** Query lrclib for a track. Prefers an exact get, then a fuzzy search. */
@@ -772,16 +886,22 @@ function saavnToSong(s: any, downloaded: Set<string>): Song {
 
 export const routes = {
     /**
-     * Resolve lyrics for a track, preferring time-synced (LRC) lyrics.
+     * Resolve lyrics for a track, preferring the most precise timing available.
      *
-     * Sources, in order: lrclib (exact get, then fuzzy search); then — if a
-     * python with the `syncedlyrics` package is available — its aggregated
-     * providers (Musixmatch, NetEase, Megalobiz, lrclib, Genius); finally any
-     * plain lyrics found. Embedded lyrics stored on the track (e.g. imported
-     * from Muzza) are handled on the frontend and take precedence when synced.
+     * Sources, in order: NetEase word-by-word lyrics (enhanced LRC); lrclib
+     * (exact get, then fuzzy search); then — if a python with the
+     * `syncedlyrics` package is available — its aggregated providers; finally
+     * any plain lyrics found. Embedded lyrics stored on the track (e.g.
+     * imported from Muzza) are handled on the frontend.
      */
     async musicLyrics(track: Song): Promise<string | null> {
         try {
+            const words = await fetchNeteaseWordLyrics(track).catch((err) => {
+                log('[lyrics] NetEase lookup failed:', err);
+                return null;
+            });
+            if (words) return words;
+
             const lrc = await fetchLrclib(track);
             if (lrc?.synced) return lrc.synced;
 

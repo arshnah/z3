@@ -112,7 +112,7 @@
 
     {#if track}
         {#if mode === "lyrics"}
-            <div class="stage" class:no-lyrics={!lyricsState.has && !playerState.isLoading}>
+            <div class="stage" class:no-lyrics={!lyricsState.has && !playerState.isLoading && !playerState.lyricsPending}>
                 <div class="left">
                     {#key track.id}
                         <!-- Shares a key with the capsule artwork, so it morphs in from the capsule. -->

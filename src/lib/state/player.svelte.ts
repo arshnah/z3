@@ -9,6 +9,8 @@ export interface CacheRecord {
     // Raw lyrics text (synced LRC or plain); turned into timed lines for display
     // where the actual audio duration is known.
     lyrics: string | null,
+    /** The online lyrics lookup hasn't finished yet. */
+    lyricsPending?: boolean,
 }
 
 /** off → stop at the end, all → wrap the context, one → repeat the current track. */
@@ -32,6 +34,8 @@ interface PlayerState {
     isLoading: boolean,
     stream: Stream | null,
     lyrics: string | null,
+    /** Lyrics for the current track are still being looked up. */
+    lyricsPending: boolean,
 
     repeat: RepeatMode,
     shuffle: boolean,
@@ -84,6 +88,7 @@ export const playerState = $state<PlayerState>({
 
     stream: null,
     lyrics: null,
+    lyricsPending: false,
 
     repeat: prefs.repeat === "off" || prefs.repeat === "one" ? prefs.repeat : "all",
     shuffle: !!prefs.shuffle,
@@ -672,34 +677,58 @@ export function loadTrack(track: Song | null): Promise<void> {
     if (pending) return pending;
 
     const promise = (async () => {
-        // If the track already carries synced lyrics (e.g. imported from Muzza),
-        // use them and skip the network lookup. Plain embedded lyrics are still
-        // worth an online lookup in case a synced version exists.
+        // Lyrics the track already carries (e.g. imported from Muzza) are used
+        // straight away. Unless they're already word-synced, still look online:
+        // a better version (word-by-word, or synced instead of plain) may exist.
         const embedded = track.lyrics ?? null;
-        const hasSynced = isSyncedLyrics(embedded);
+        const lookup = hasWordTimings(embedded)
+            ? Promise.resolve(null)
+            : client.musicLyrics(slimSong($state.snapshot(track) as Song)).catch(() => null);
 
-        // Lyrics are optional; a failure there must not block playback. A stream
-        // failure, however, propagates so callers can surface it to the user.
-        const [lyrics, stream] = await Promise.all([
-            hasSynced ? Promise.resolve(embedded) : client.musicLyrics(slimSong($state.snapshot(track) as Song)).catch(() => null),
-            client.musicStream(track.id),
-        ]);
+        // Only the audio gates playback. A stream failure propagates so callers
+        // can surface it to the user.
+        const stream = await client.musicStream(track.id);
 
         // If fetching this track also saved it to disk, reflect that in the library.
         if (stream.savedToDisk) libraryState.markDownloaded(track.id);
 
-        // Keep the raw text; fall back to any embedded (plain) lyrics we were given.
-        cache.set(track.id, { lyrics: lyrics ?? embedded, stream });
+        const record: CacheRecord = { lyrics: embedded, stream, lyricsPending: true };
+        cache.set(track.id, record);
         trimCache();
+
+        // Lyrics arrive whenever they're ready (they can take a while).
+        lookup.then((found) => {
+            record.lyrics = betterLyrics(found, embedded);
+            record.lyricsPending = false;
+            // (Compared by id: the player holds a reactive proxy of the stream,
+            // never the same object as record.stream.)
+            if (playerState.currentTrack?.id === track.id && playerState.lyricsPending) {
+                playerState.lyrics = record.lyrics;
+                playerState.lyricsPending = false;
+            }
+        });
     })().finally(() => inflight.delete(track.id));
 
     inflight.set(track.id, promise);
     return promise;
 }
 
+const WORD_TAG = /<\d{1,2}:\d{2}(?:[.:]\d{1,3})?>/;
+
+function hasWordTimings(lyrics: string | null): boolean {
+    return !!lyrics && WORD_TAG.test(lyrics);
+}
+
+/** Prefer word-synced over line-synced over plain; ties go to what the track already had. */
+function betterLyrics(found: string | null, embedded: string | null): string | null {
+    const rank = (l: string | null) => (!l ? 0 : hasWordTimings(l) ? 3 : isSyncedLyrics(l) ? 2 : 1);
+    return rank(found) > rank(embedded) ? found : embedded;
+}
+
 export function resetState() {
     playerState.stream = null;
     playerState.lyrics = null;
+    playerState.lyricsPending = false;
     playerState.currentTime = 0;
     playerState.duration = 0;
     playerState.isLoading = true;
@@ -711,6 +740,7 @@ export function applyCache(cached?: CacheRecord) {
 
     playerState.stream = cached.stream;
     playerState.lyrics = cached.lyrics;
+    playerState.lyricsPending = !!cached.lyricsPending;
     playerState.isLoading = false;
     playerState.paused = false;
 }

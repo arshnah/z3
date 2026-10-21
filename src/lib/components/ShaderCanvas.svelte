@@ -5,7 +5,7 @@
      */
     import { onMount } from "svelte";
     import { analyser } from "$lib/audio/analyser";
-    import { artworkState } from "$lib/state/artwork.svelte";
+    import { artworkState, type RGB } from "$lib/state/artwork.svelte";
     import { ShaderRunner, squareArt, type ShaderPack } from "$lib/visualizer/shadertoy";
 
     interface Props {
@@ -40,6 +40,11 @@
         let shownIntensity = intensity;
         let loadingArt = false;
         let dirty = true;
+        // Palette shown in the shader: glides to a new song's colours (~1.5s)
+        // like the background does, instead of snapping.
+        const target = () => [...artworkState.palette.colors, artworkState.palette.accent] as RGB[];
+        const shownColors = target().map((c) => [...c] as RGB);
+        const colorsSettled = () => target().every((c, i) => c.every((v, j) => Math.abs(v - shownColors[i][j]) < 0.5));
 
         const resize = () => {
             const dpr = Math.min(window.devicePixelRatio || 1, 2);
@@ -78,7 +83,7 @@
 
             const now = performance.now();
             // Transitions (new artwork, intensity change) always get full frame rate.
-            const settling = artMix < 1 || Math.abs(intensity - shownIntensity) > 0.002;
+            const settling = artMix < 1 || Math.abs(intensity - shownIntensity) > 0.002 || !colorsSettled();
             if (!animate && !settling && !dirty) return;
             const fps = features.live || settling ? pack.maxFps : (pack.idleFps ?? pack.maxFps);
             const minFrame = fps ? 1000 / fps : 0;
@@ -87,6 +92,8 @@
 
             artMix = Math.min(1, artMix + frameDt / 1.4);
             shownIntensity += (intensity - shownIntensity) * Math.min(1, frameDt * 3);
+            const ease = Math.min(1, frameDt * 2.5);
+            target().forEach((c, i) => c.forEach((v, j) => (shownColors[i][j] += (v - shownColors[i][j]) * ease)));
 
             lastDraw = now;
             dirty = false;
@@ -94,7 +101,8 @@
                 time: animate ? (now - start) / 1000 : 0,
                 dt: Math.min(0.1, frameDt || dt),
                 audio: features,
-                colors: artworkState.palette.colors,
+                colors: [shownColors[0], shownColors[1], shownColors[2]],
+                accent: shownColors[3],
                 artMix,
                 intensity: shownIntensity,
             });

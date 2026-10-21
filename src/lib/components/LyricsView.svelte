@@ -3,6 +3,7 @@
     import { lyricsState } from "$lib/state/lyrics.svelte";
     import { playerState, seek } from "$lib/state/player.svelte";
     import { analyser } from "$lib/audio/analyser";
+    import { bracketedRuns } from "$lib/utils";
     import { onMount, tick } from "svelte";
 
     let { compact = false }: { compact?: boolean } = $props();
@@ -126,7 +127,7 @@
                 // Estimated timings sweep over ~90% of the line (see lyrics store).
                 const sweepEnd = line.estimated ? line.time + Math.max(0.4, (line.end - line.time) * 0.9) : line.end;
                 line.words.forEach((w, i) => {
-                    const end = line.words![i + 1]?.time ?? sweepEnd;
+                    const end = w.end ?? line.words![i + 1]?.time ?? sweepEnd;
                     const p = Math.min(1, Math.max(0, (t - w.time) / Math.max(0.05, end - w.time)));
                     const last = fillState[i] ?? -1;
                     if (Math.abs(p - last) < 0.005 && !(p === 1 && last !== 1) && !(p === 0 && last !== 0)) return;
@@ -135,6 +136,7 @@
                     if (!word) return;
                     word.style.setProperty("--wp", `${(p * 100).toFixed(1)}%`);
                     word.classList.toggle("lit", p > 0);
+                    word.classList.toggle("done", p >= 1);
                 });
             }
         }),
@@ -169,6 +171,8 @@
                         class="line {state}"
                         class:far={dist > 5}
                         class:has-words={!!line.words}
+                        class:wordsync={!!line.words && !line.estimated}
+                        class:aside-line={line.aside}
                         data-line={i}
                         style:translate="0 {baseY + userOffset}px"
                         style:transition-delay="{delay}ms"
@@ -176,7 +180,8 @@
                         onclick={() => jump(line.time)}
                     >
                         {#if line.words}
-                            {#each line.words as word}<span class="word" data-w>{word.text}</span>{/each}
+                            <!-- `held`: a word sung for a while (a long note) swells as it's sung. -->
+                            {#each line.words as word, wi}{@const held = !line.estimated && (word.end ?? line.words[wi + 1]?.time ?? line.end) - word.time >= 0.9}<span class="word" class:held class:aside={word.aside} data-w>{word.text}</span>{/each}
                         {:else}
                             {line.text}
                         {/if}
@@ -188,10 +193,10 @@
         <div class="plain">
             <span class="badge"><Icon name="text" /> Unsynced lyrics</span>
             {#each lyricsState.plain as text}
-                <p>{text}</p>
+                <p>{#each bracketedRuns(text) as run}{#if run.aside}<span class="aside">{run.text}</span>{:else}{run.text}{/if}{/each}</p>
             {/each}
         </div>
-    {:else if playerState.isLoading}
+    {:else if playerState.isLoading || playerState.lyricsPending}
         <div class="loading">
             {#each [70, 88, 56, 80] as w, i}
                 <div class="skeleton" style:width="{w}%" style:animation-delay="{i * 120}ms"></div>
@@ -298,6 +303,8 @@
        timings when available, otherwise spread evenly over the line). */
     .word {
         --wp: 0%;
+        --lit: #fff;
+        --unlit: rgb(255 255 255 / 0.32);
         white-space: pre-wrap;
     }
     /* The soft edge spans [wp*1.1 - 10%, wp*1.1]: entirely before the word at 0%
@@ -305,17 +312,67 @@
     .line.active .word {
         background: linear-gradient(
             90deg,
-            #fff calc(var(--wp) * 1.1 - 10%),
-            rgb(255 255 255 / 0.32) calc(var(--wp) * 1.1)
+            var(--lit) calc(var(--wp) * 1.1 - 10%),
+            var(--unlit) calc(var(--wp) * 1.1)
         );
         -webkit-background-clip: text;
         background-clip: text;
         color: transparent;
     }
     /* words that have started glow, breathing with the music */
-    /* `lit` is toggled from script, hence :global (Svelte can't see it statically) */
+    /* `lit`/`done` are toggled from script, hence :global (Svelte can't see them statically) */
     .line.active .word:global(.lit) {
         filter: drop-shadow(0 0 calc(5px + var(--glow) * 12px) rgb(255 255 255 / calc(0.4 + var(--glow) * 0.35)));
+    }
+
+    /* Real word-by-word timings: each word is its own little block that rises as
+       it's sung, the glow edge is softer, and held notes swell. */
+    .wordsync .word {
+        display: inline-block;
+        transform-origin: 50% 85%;
+        transition:
+            translate 0.7s cubic-bezier(0.2, 0.85, 0.25, 1),
+            scale 0.9s cubic-bezier(0.2, 0.85, 0.25, 1),
+            filter 0.4s ease;
+    }
+    /* soft edge spans [wp*1.25 - 25%, wp*1.25]: still none at 0%, fully lit at 100% */
+    .line.active.wordsync .word {
+        background: linear-gradient(
+            90deg,
+            var(--lit) calc(var(--wp) * 1.25 - 25%),
+            var(--unlit) calc(var(--wp) * 1.25)
+        );
+        -webkit-background-clip: text;
+        background-clip: text;
+    }
+    .line.active.wordsync .word:global(.lit) {
+        translate: 0 -0.06em;
+    }
+    /* a long note grows and glows while it's held, then settles */
+    .line.active.wordsync .word.held:global(.lit:not(.done)) {
+        scale: 1.06;
+        filter: drop-shadow(0 0 calc(10px + var(--glow) * 18px) rgb(255 255 255 / calc(0.55 + var(--glow) * 0.35)));
+    }
+
+    /* (Bracketed) backing vocals and ad-libs: smaller, lighter, and tinted with
+       the song's accent colour so they read as secondary to the main line. */
+    .word.aside,
+    .plain .aside {
+        --lit: color-mix(in srgb, var(--accent, #fff) 40%, rgb(255 255 255 / 0.8));
+        --unlit: color-mix(in srgb, var(--accent, #fff) 35%, rgb(255 255 255 / 0.2));
+        color: var(--lit);
+        font-weight: 650;
+        letter-spacing: -0.01em;
+    }
+    .line:not(.aside-line) .word.aside,
+    .plain .aside {
+        font-size: 0.72em;
+    }
+    .line.aside-line {
+        font-size: calc(var(--size) * 0.72);
+    }
+    .line.active .word.aside:global(.lit) {
+        filter: drop-shadow(0 0 calc(3px + var(--glow) * 6px) rgb(255 255 255 / calc(0.15 + var(--glow) * 0.15)));
     }
 
     /* instrumental break: three dots filling in sequence, gently breathing */

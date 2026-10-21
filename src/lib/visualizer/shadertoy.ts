@@ -2,16 +2,21 @@
  * Minimal WebGL2 Shadertoy runtime (mirrors musicsync's multipass pipeline).
  *
  * Each pack lists passes; a pass renders into a named buffer or the screen and
- * reads channels from: "audio" (512×2 FFT/waveform texture), "art" / "artPrev"
- * (current and previous album art, mipmapped so high LODs act as a cheap blur),
- * or any buffer name (reading its own buffer = previous frame / feedback).
+ * reads channels from: "audio" (512×2 FFT/waveform texture), "audioEq" (512×1,
+ * each band relative to its own recent range, see AudioFeatures.equalized),
+ * "art" / "artPrev" (current and previous album art, mipmapped so high LODs act
+ * as a cheap blur), or any buffer name (reading its own buffer = previous frame
+ * / feedback).
+ *
+ * Besides Shadertoy's uniforms, every pass gets the music (iBeat, iLevel, iBass,
+ * iTravel, iRot) and the current song's palette (iColor0–2 + iAccent).
  */
 
 import type { AudioFeatures } from "$lib/audio/analyser";
 import type { RGB } from "$lib/state/artwork.svelte";
 import { coverCrop } from "$lib/utils";
 
-export type ChannelSource = "audio" | "art" | "artPrev" | string;
+export type ChannelSource = "audio" | "audioEq" | "art" | "artPrev" | string;
 
 export interface PassDef {
     source: string;
@@ -55,6 +60,7 @@ uniform float iRot;
 uniform vec3 iColor0;
 uniform vec3 iColor1;
 uniform vec3 iColor2;
+uniform vec3 iAccent;
 uniform float iArtMix;
 uniform float iIntensity;
 out vec4 zetaFragColor;
@@ -85,6 +91,7 @@ export class ShaderRunner {
     private buffers = new Map<string, Buffer>();
     private audioTex: WebGLTexture;
     private audioData = new Uint8Array(512 * 2);
+    private audioEqTex: WebGLTexture;
     private artTex: WebGLTexture;
     private artPrevTex: WebGLTexture;
     private vao: WebGLVertexArrayObject;
@@ -108,6 +115,7 @@ export class ShaderRunner {
         gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
 
         this.audioTex = this.makeTexture(512, 2, gl.R8, gl.RED, gl.UNSIGNED_BYTE);
+        this.audioEqTex = this.makeTexture(512, 1, gl.R8, gl.RED, gl.UNSIGNED_BYTE);
         this.artTex = this.makeSolidTexture([30, 20, 60]);
         this.artPrevTex = this.makeSolidTexture([30, 20, 60]);
 
@@ -221,6 +229,7 @@ export class ShaderRunner {
         dt: number;
         audio: AudioFeatures;
         colors: [RGB, RGB, RGB];
+        accent: RGB;
         artMix: number;
         intensity: number;
     }) {
@@ -236,10 +245,13 @@ export class ShaderRunner {
         gl.bindTexture(gl.TEXTURE_2D, this.audioTex);
         gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
         gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, 512, 2, gl.RED, gl.UNSIGNED_BYTE, this.audioData);
+        gl.bindTexture(gl.TEXTURE_2D, this.audioEqTex);
+        gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, 512, 1, gl.RED, gl.UNSIGNED_BYTE, a.equalized);
 
         gl.bindVertexArray(this.vao);
         const rendered = new Set<string>();
         const c = opts.colors.map((rgb) => rgb.map((v) => v / 255)) as number[][];
+        const accent = opts.accent.map((v) => v / 255);
 
         for (const pass of this.passes) {
             gl.useProgram(pass.program);
@@ -257,6 +269,7 @@ export class ShaderRunner {
             gl.uniform3fv(u("iColor0"), c[0]);
             gl.uniform3fv(u("iColor1"), c[1]);
             gl.uniform3fv(u("iColor2"), c[2]);
+            gl.uniform3fv(u("iAccent"), accent);
             gl.uniform1f(u("iArtMix"), opts.artMix);
             gl.uniform1f(u("iIntensity"), opts.intensity);
 
@@ -264,6 +277,7 @@ export class ShaderRunner {
                 const ch = Number(chStr);
                 gl.activeTexture(gl.TEXTURE0 + ch);
                 if (key === "audio") gl.bindTexture(gl.TEXTURE_2D, this.audioTex);
+                else if (key === "audioEq") gl.bindTexture(gl.TEXTURE_2D, this.audioEqTex);
                 else if (key === "art") gl.bindTexture(gl.TEXTURE_2D, this.artTex);
                 else if (key === "artPrev") gl.bindTexture(gl.TEXTURE_2D, this.artPrevTex);
                 else {

@@ -19,6 +19,14 @@ export interface AudioFeatures {
     spectrum: Uint8Array;
     /** 512 bytes: waveform centred on 128, Shadertoy row 1. */
     waveform: Uint8Array;
+    /**
+     * 512 bytes: the spectrum with each band's long-term average evened out.
+     * Bass naturally carries far more energy than treble, so on the raw
+     * spectrum the low bands always stand taller; here every band gets a gain
+     * that brings its average in line with the overall average. Peaks and
+     * quiet moments are kept as they are, just at an even baseline.
+     */
+    equalized: Uint8Array;
     /** 0..1 smoothed loudness. */
     level: number;
     /** 0..1 bass band energy. */
@@ -49,6 +57,7 @@ class Analyser {
     readonly features: AudioFeatures = {
         spectrum: new Uint8Array(BINS),
         waveform: new Uint8Array(BINS).fill(128),
+        equalized: new Uint8Array(BINS),
         level: 0,
         bass: 0,
         beat: 0,
@@ -59,6 +68,8 @@ class Analyser {
 
     private bassFast = 0;
     private bassSlow = 0;
+    // Per-band running average (0..1), for evening out the spectrum.
+    private bandMean = new Float32Array(BINS).fill(0.3);
     private lastUpdate = 0;
     private subscribers = new Set<(f: AudioFeatures, dt: number) => void>();
     private raf = 0;
@@ -156,6 +167,21 @@ class Analyser {
             for (let i = 0; i < BINS; i++) {
                 f.spectrum[i] = Math.max(this.freq[i], f.spectrum[i] * 0.82);
             }
+
+            // Equalized: give each band a gain that brings its ~8s average to the
+            // overall average. Gains are capped, so a band that's basically
+            // silent in this song stays low instead of being boosted into noise.
+            const meanRate = Math.min(1, dt / 8);
+            let overall = 0;
+            for (let i = 0; i < BINS; i++) {
+                this.bandMean[i] += (f.spectrum[i] / 255 - this.bandMean[i]) * meanRate;
+                overall += this.bandMean[i];
+            }
+            overall /= BINS;
+            for (let i = 0; i < BINS; i++) {
+                const gain = Math.min(2.2, Math.max(0.55, overall / Math.max(0.02, this.bandMean[i])));
+                f.equalized[i] = Math.min(255, Math.round(f.spectrum[i] * gain));
+            }
             // Row 1: most recent 512 samples of the waveform.
             const offset = this.time.length - BINS;
             let sumSq = 0;
@@ -180,6 +206,7 @@ class Analyser {
             // Idle: let everything settle smoothly instead of freezing.
             for (let i = 0; i < BINS; i++) {
                 f.spectrum[i] = Math.floor(f.spectrum[i] * 0.9);
+                f.equalized[i] = Math.floor(f.equalized[i] * 0.9);
                 f.waveform[i] = Math.round(128 + (f.waveform[i] - 128) * 0.85);
             }
             f.live = false;

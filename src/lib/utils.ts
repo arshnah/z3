@@ -16,6 +16,10 @@ export function randomChoice<T>(arr: T[]): T {
 export type LrcWord = {
     time: number;
     text: string;
+    /** When the word stops being sung, if the source says (otherwise: when the next word starts). */
+    end?: number;
+    /** Inside (parentheses): a backing vocal or ad-lib. */
+    aside?: boolean;
 };
 
 export type LrcLine = {
@@ -28,7 +32,11 @@ export type LrcLine = {
 const stampToSeconds = (m: string, s: string, ms?: string) =>
     (+m) * 60 + (+s) + (ms ? +ms.padEnd(3, '0') / 1000 : 0);
 
-/** Split an enhanced-LRC line body into timed words; undefined when it has none. */
+/**
+ * Split an enhanced-LRC line body into timed words; undefined when it has none.
+ * A tag followed by no text (e.g. at the end of the line, or before a pause)
+ * marks where the previous word ends.
+ */
 function parseWords(body: string): LrcWord[] | undefined {
     const re = /<(\d{1,2}):(\d{2})(?:[.:](\d{1,3}))?>/g;
     const marks = [...body.matchAll(re)];
@@ -38,7 +46,9 @@ function parseWords(body: string): LrcWord[] | undefined {
         const start = mark.index! + mark[0].length;
         const end = i + 1 < marks.length ? marks[i + 1].index! : body.length;
         const text = body.slice(start, end);
-        if (text.trim()) words.push({ time: stampToSeconds(mark[1], mark[2], mark[3]), text });
+        const time = stampToSeconds(mark[1], mark[2], mark[3]);
+        if (text.trim()) words.push({ time, text });
+        else if (words.length && time > words[words.length - 1].time) words[words.length - 1].end = time;
     });
     return words.length ? words : undefined;
 }
@@ -73,6 +83,44 @@ export function plainLyricLines(raw: string | null): string[] {
         .split('\n')
         .map(l => l.replace(/^\[[^\]]*\]\s*/, '').trim())
         .filter(l => l.length > 0);
+}
+
+/**
+ * Which pieces of a lyric line sit inside (parentheses): backing vocals and
+ * ad-libs like "(I believe)". Brackets can span several pieces, so depth is
+ * tracked across them; a piece counts as bracketed when most of its letters are.
+ */
+export function bracketedPieces(pieces: string[]): boolean[] {
+    let depth = 0;
+    return pieces.map((piece) => {
+        const startDepth = depth;
+        let inside = 0;
+        let outside = 0;
+        for (const ch of piece) {
+            if (ch === '(') depth++;
+            else if (ch === ')') depth = Math.max(0, depth - 1);
+            else if (/[\p{L}\p{N}]/u.test(ch)) {
+                if (depth > 0) inside++;
+                else outside++;
+            }
+        }
+        if (inside || outside) return inside > outside;
+        // Only punctuation/brackets: go with whichever side it touches.
+        return startDepth > 0 || piece.includes('(');
+    });
+}
+
+/** A lyric line split into runs of normal and (bracketed) text. */
+export function bracketedRuns(text: string): { text: string; aside: boolean }[] {
+    const tokens = text.match(/\S+\s*/g) ?? [text];
+    const flags = bracketedPieces(tokens);
+    const runs: { text: string; aside: boolean }[] = [];
+    tokens.forEach((token, i) => {
+        const last = runs.at(-1);
+        if (last && last.aside === flags[i]) last.text += token;
+        else runs.push({ text: token, aside: flags[i] });
+    });
+    return runs;
 }
 
 /** True when the text contains LRC-style `[mm:ss]` timestamps. */

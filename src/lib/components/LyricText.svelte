@@ -44,7 +44,7 @@
         }
 
         if (!lyrics.length) {
-            lyricsTextCurrent = '♪ (No lyrics available)';
+            lyricsTextCurrent = playerState.lyricsPending ? '♪' : '♪ (No lyrics available)';
             lyricsTextNext = '';
             return;
         }

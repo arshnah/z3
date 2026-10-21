@@ -1,7 +1,9 @@
 // Zeta "Halo": a radial, mirrored spectrum ringing the album art, over an
 // aurora tinted by the art's palette. The cover itself is drawn on top in
 // HTML, centred, with radius RING_R of the short side.
-//   iChannel0 = audio (row 0 spectrum, row 1 waveform), iChannel1 = art.
+//   iChannel0 = audio (row 0 spectrum, row 1 waveform), iChannel1 = art,
+//   iChannel2 = equalized spectrum (each band relative to its own range, so
+//   bass doesn't permanently tower over the treble side of the ring).
 
 #define PI 3.14159265
 #define TAU 6.28318531
@@ -23,13 +25,24 @@ float fbm(vec2 p) {
   return v;
 }
 
-float spectrum(float x) { return texture(iChannel0, vec2(x, 0.25)).r; }
 float wave(float x) { return texture(iChannel0, vec2(x, 0.75)).r - 0.5; }
 
+// Spectrum position (texture x) for a point around the ring, 0 = bass .. 1 = highs.
+float bandAt(float x) { return pow(x, 1.4) * 0.7 + 0.004; }
+
+// A bar's height: the equalized spectrum averaged across the bar's width.
+float barLevel(float x0, float x1) {
+  float s = 0.0;
+  for (int i = 0; i < 4; i++) s += texture(iChannel2, vec2(bandAt(mix(x0, x1, (float(i) + 0.5) / 4.0)), 0.5)).r;
+  return s / 4.0;
+}
+
+// The song's colours as a loop: deep colour -> accent -> second colour.
 vec3 palette(float t) {
   t = fract(t);
-  vec3 a = mix(iColor0, iColor1, smoothstep(0.0, 0.5, t));
-  return mix(a, iColor2 + 0.25, smoothstep(0.5, 1.0, t));
+  vec3 a = mix(iColor0, iAccent, smoothstep(0.0, 0.4, t));
+  vec3 b = mix(a, iColor1, smoothstep(0.4, 0.75, t));
+  return mix(b, iColor0, smoothstep(0.75, 1.0, t));
 }
 
 void mainImage(out vec4 fragColor, in vec2 fragCoord) {
@@ -56,8 +69,8 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
   float bars = 96.0;
   float bi = floor(x * bars);
   float bx = (bi + 0.5) / bars;
-  float amp = spectrum(pow(bx, 1.6) * 0.62 + 0.004);
-  amp = pow(amp, 2.2) * (0.9 + 0.35 * iBeat);
+  // Equalized, so bass doesn't permanently stand taller than the treble side.
+  float amp = pow(barLevel(bi / bars, (bi + 1.0) / bars), 2.2) * (0.9 + 0.35 * iBeat);
 
   float inner = RING_R * pulse + 0.018;
   float len = 0.02 + amp * 0.3;
@@ -65,7 +78,7 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
   float across = abs(fract(x * bars) - 0.5) * 2.0;           // 0 at bar centre
   float barWidth = smoothstep(0.62, 0.35, across);
   float bar = barWidth * smoothstep(-0.02, 0.0, along) * smoothstep(1.0, 0.85, along);
-  vec3 barCol = palette(bx * 0.9 + t * 0.02) * (1.3 + 0.6 * along);
+  vec3 barCol = palette(bx * 0.9 + t * 0.02) * (0.95 + 0.5 * along);
   col += barCol * bar;
   // Soft glow around the bars.
   col += barCol * 0.35 * barWidth * exp(-abs(along - 0.5) * 3.0) * smoothstep(0.0, 0.1, amp) * step(0.0, along);

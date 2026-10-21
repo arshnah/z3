@@ -1,5 +1,5 @@
 import { playerState } from "$lib/state/player.svelte";
-import { isSyncedLyrics, parseLrc, plainLyricLines, type LrcLine, type LrcWord } from "$lib/utils";
+import { bracketedPieces, isSyncedLyrics, parseLrc, plainLyricLines, type LrcLine, type LrcWord } from "$lib/utils";
 
 /** A gap this long between lines gets an "instrumental" indicator. */
 const INTERLUDE_MIN = 5.5;
@@ -11,6 +11,8 @@ export interface DisplayLine extends LrcLine {
     interlude?: boolean;
     /** Word timings were estimated (no word-level data in the source). */
     estimated?: boolean;
+    /** The whole line is in (parentheses): backing vocals. */
+    aside?: boolean;
 }
 
 /**
@@ -54,11 +56,19 @@ class LyricsStore {
         }
         parsed.forEach((line, i) => {
             const next = parsed[i + 1]?.time ?? Math.max(duration, line.time + 4);
-            // A sung line rarely lasts more than ~7s; the rest of a long gap is instrumental.
-            const lineEnd = next - line.time > INTERLUDE_MIN + 2 ? line.time + Math.min(7, (next - line.time) * 0.5) : next;
+            // When the source says when the last word ends, that's when the line ends.
+            // Otherwise: a sung line rarely lasts more than ~7s; the rest of a long gap is instrumental.
+            const sungEnd = line.words?.at(-1)?.end;
+            const lineEnd = sungEnd
+                ? Math.min(next, sungEnd + 0.35)
+                : next - line.time > INTERLUDE_MIN + 2
+                  ? line.time + Math.min(7, (next - line.time) * 0.5)
+                  : next;
             // Real word timings when the source has them; otherwise estimate.
-            const words = line.words ?? estimateWords(line.text, line.time, lineEnd);
-            out.push({ ...line, words, estimated: !line.words, end: lineEnd });
+            const timed = line.words ?? estimateWords(line.text, line.time, lineEnd);
+            const asides = bracketedPieces(timed.map((w) => w.text));
+            const words = timed.map((w, wi) => (asides[wi] ? { ...w, aside: true } : w));
+            out.push({ ...line, words, estimated: !line.words, end: lineEnd, aside: asides.every(Boolean) });
             if (lineEnd < next && next - lineEnd >= INTERLUDE_MIN - 1 && parsed[i + 1]) {
                 out.push({ time: lineEnd, end: next, text: "", interlude: true });
             }
