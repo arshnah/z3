@@ -26,6 +26,7 @@
     import { fade, fly } from "svelte/transition";
     import { sendArt, receiveArt } from "$lib/transitions";
     import { toasts } from "$lib/state/toast.svelte";
+    import { tilt } from "$lib/tilt";
 
     const track = $derived(playerState.currentTrack);
     const fav = $derived(track ? libraryState.isFavourite(track.id) : false);
@@ -68,13 +69,7 @@
     {#if mode === "visualizer"}
         {#key pack.id}
             <div class="vis-canvas" transition:fade={{ duration: 500 }}>
-                <ShaderCanvas
-                    {pack}
-                    onerror={(err) => {
-                        toasts.error(`Visualizer “${pack.name}” failed to start: ${err.message}`);
-                        if (pack.id !== "halo") setPack("halo");
-                    }}
-                />
+                {@render visualizer()}
             </div>
         {/key}
     {/if}
@@ -92,22 +87,28 @@
             {/if}
         </div>
         <div class="top-right">
-            {#if mode === "visualizer"}
-                <div class="segmented packs">
-                    {#each VISUALIZER_PACKS as p}
-                        <button aria-pressed={p.id === pack.id} onclick={() => setPack(p.id)}>{p.name}</button>
-                    {/each}
-                </div>
-            {/if}
             <div class="segmented">
                 <button aria-pressed={mode === "lyrics"} onclick={() => (ui.nowPlayingMode = "lyrics")}>
                     <Icon name="mic-vocal" /> Lyrics
+                </button>
+                <button aria-pressed={mode === "stage"} onclick={() => (ui.nowPlayingMode = "stage")}>
+                    <Icon name="blend" /> Stage
                 </button>
                 <button aria-pressed={mode === "visualizer"} onclick={() => (ui.nowPlayingMode = "visualizer")}>
                     <Icon name="audio-waveform" /> Visualizer
                 </button>
             </div>
         </div>
+        {#if mode !== "lyrics"}
+            <!-- Its own floating row: four packs plus three modes don't fit on one line. -->
+            <div class="packs-bar">
+                <div class="segmented packs">
+                    {#each VISUALIZER_PACKS as p}
+                        <button aria-pressed={p.id === pack.id} onclick={() => setPack(p.id)}>{p.name}</button>
+                    {/each}
+                </div>
+            </div>
+        {/if}
     </header>
 
     {#if track}
@@ -117,8 +118,12 @@
                     {#key track.id}
                         <!-- Shares a key with the capsule artwork, so it morphs in from the capsule. -->
                         <div class="art-slot" in:receiveArt={{ key: "art" }} out:sendArt={{ key: "art" }}>
-                            <div class="art" class:paused={playerState.paused}>
-                                <Cover src={artSrc} thumbnails={track.thumbnails} title={track.title} size="100%" radius="var(--r-lg)" />
+                            <!-- Leans toward the cursor, like the cards in search. -->
+                            <div class="art-tilt" use:tilt={{ max: 9 }}>
+                                <div class="art" class:paused={playerState.paused}>
+                                    <Cover src={artSrc} thumbnails={track.thumbnails} title={track.title} size="100%" radius="var(--r-lg)" />
+                                </div>
+                                <div class="shine"></div>
                             </div>
                         </div>
                     {/key}
@@ -127,6 +132,43 @@
                 </div>
                 <div class="right">
                     <LyricsView />
+                </div>
+            </div>
+        {:else if mode === "stage"}
+            <div class="split">
+                <div class="lyrics-pane">
+                    {#if lyricsState.has || playerState.lyricsPending}
+                        <LyricsView />
+                    {:else}
+                        <div class="lyrics-empty">
+                            <Icon name="mic-vocal" />
+                            <h3>No lyrics for this one</h3>
+                            <p>Enjoy the visuals.</p>
+                        </div>
+                    {/if}
+                </div>
+                <div class="vis-pane">
+                    <div class="vis-frame">
+                        {#key pack.id}
+                            <div class="vis-canvas" transition:fade={{ duration: 400 }}>
+                                {@render visualizer()}
+                            </div>
+                        {/key}
+                        {#if pack.id === "halo"}
+                            <div class="disc framed" class:spinning={!playerState.paused}>
+                                <Cover src={artSrc} thumbnails={track.thumbnails} title={track.title} size="100%" radius="50%" />
+                            </div>
+                        {/if}
+                    </div>
+                    <div class="vis-bar">
+                        <div class="vis-meta">
+                            {#if pack.id !== "halo"}
+                                <Cover src={artSrc} thumbnails={track.thumbnails} title={track.title} size={56} radius="var(--r-sm)" />
+                            {/if}
+                            {@render meta()}
+                        </div>
+                        {@render controls()}
+                    </div>
                 </div>
             </div>
         {:else}
@@ -149,6 +191,16 @@
         {/if}
     {/if}
 </div>
+
+{#snippet visualizer()}
+    <ShaderCanvas
+        {pack}
+        onerror={(err) => {
+            toasts.error(`Visualizer “${pack.name}” failed to start: ${err.message}`);
+            if (pack.id !== "halo") setPack("halo");
+        }}
+    />
+{/snippet}
 
 {#snippet meta()}
     {#if track}
@@ -228,12 +280,26 @@
         display: grid;
         grid-template-columns: 1fr auto 1fr;
         align-items: center;
-        padding: 16px 22px;
+        /* Leave the OS window buttons their corner (see --wc-left/right);
+           the rest of the bar doubles as the window's drag handle. */
+        padding: 12px calc(22px + var(--wc-right)) 16px calc(22px + var(--wc-left));
         transition: opacity 0.6s;
+        -webkit-app-region: drag;
+    }
+    .top :global(button) {
+        -webkit-app-region: no-drag;
     }
     .idle .top,
-    .idle .vis-bottom {
+    .idle .vis-bottom,
+    .idle .packs-bar {
         opacity: 0;
+    }
+    .packs-bar {
+        position: absolute;
+        top: calc(100% - 4px);
+        left: 50%;
+        translate: -50% 0;
+        transition: opacity 0.6s;
     }
     .top .icon-btn {
         color: #fff;
@@ -302,16 +368,49 @@
     .art-slot {
         width: 100%;
     }
+    .art-tilt {
+        --rx: 0deg;
+        --ry: 0deg;
+        --mx: 50%;
+        --my: 0%;
+        position: relative;
+        perspective: 900px;
+        transform-style: preserve-3d;
+    }
     .art {
         width: 100%;
         aspect-ratio: 1;
         border-radius: var(--r-lg);
+        transform: rotateX(var(--rx)) rotateY(var(--ry)) scale(var(--art-scale, 1));
         box-shadow: 0 40px 80px -20px rgb(0 0 0 / 0.65), 0 12px 30px rgb(0 0 0 / 0.3);
-        transition: transform 0.7s var(--ease-spring), box-shadow 0.7s;
+        transition:
+            transform 0.6s var(--ease-spring),
+            translate 0.4s var(--ease-out),
+            box-shadow 0.7s;
+    }
+    .art-tilt:hover .art {
+        translate: 0 -4px;
+        transition:
+            transform 0.1s linear,
+            translate 0.4s var(--ease-out),
+            box-shadow 0.7s;
     }
     .art.paused {
-        transform: scale(0.9);
+        --art-scale: 0.9;
         box-shadow: 0 20px 50px -20px rgb(0 0 0 / 0.5);
+    }
+    .shine {
+        position: absolute;
+        inset: 0;
+        border-radius: var(--r-lg);
+        background: radial-gradient(60% 60% at var(--mx) var(--my), rgb(255 255 255 / 0.24), transparent 70%);
+        opacity: 0;
+        transition: opacity 0.3s;
+        pointer-events: none;
+        mix-blend-mode: overlay;
+    }
+    .art-tilt:hover .shine {
+        opacity: 1;
     }
     .right {
         min-width: 0;
@@ -439,6 +538,99 @@
         flex: 1;
         min-height: 0;
     }
+
+    /* --- stage: lyrics on the left, the visualizer on the right -------- */
+    .split {
+        position: relative;
+        z-index: 1;
+        flex: 1;
+        min-height: 0;
+        display: grid;
+        grid-template-columns: minmax(280px, 0.85fr) minmax(0, 1.15fr);
+        gap: clamp(20px, 3.4vw, 64px);
+        width: 100%;
+        max-width: 1600px;
+        margin: 0 auto;
+        /* clear of the floating pack selector under the header */
+        padding: 44px clamp(24px, 4.6vw, 84px) 22px;
+    }
+    .lyrics-pane {
+        min-width: 0;
+        min-height: 0;
+        display: flex;
+        align-items: center;
+        padding-bottom: 12px;
+    }
+    .lyrics-pane > :global(.lyrics) {
+        width: 100%;
+        height: 100%;
+        mask-image: linear-gradient(180deg, transparent 0%, #000 14%, #000 80%, transparent 100%);
+    }
+    .lyrics-empty {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 6px;
+        width: 100%;
+        height: 100%;
+        text-align: center;
+        color: rgb(255 255 255 / 0.55);
+    }
+    .lyrics-empty :global(svg) {
+        width: 30px;
+        height: 30px;
+        opacity: 0.7;
+    }
+    .lyrics-empty h3 {
+        font-size: 17px;
+        font-weight: 700;
+        color: rgb(255 255 255 / 0.8);
+    }
+    .lyrics-empty p {
+        font-size: 13.5px;
+    }
+
+    .vis-pane {
+        display: flex;
+        flex-direction: column;
+        gap: 16px;
+        min-width: 0;
+        min-height: 0;
+    }
+    .vis-frame {
+        position: relative;
+        flex: 1;
+        min-height: 0;
+        border-radius: 26px;
+        overflow: hidden;
+        border: 1px solid rgb(255 255 255 / 0.09);
+        box-shadow: 0 30px 70px -30px rgb(0 0 0 / 0.8);
+        container-type: size;
+        isolation: isolate;
+    }
+    .vis-frame .vis-canvas {
+        border-radius: inherit;
+    }
+    .vis-bar {
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+        padding: 0 2px;
+    }
+    .vis-bar .ctl {
+        padding: 0;
+    }
+    /* The cover sits at the centre of the Halo ring inside its frame. */
+    .disc.framed {
+        width: min(46cqw, 46cqh);
+        height: auto;
+        aspect-ratio: 1;
+        margin-top: 0;
+    }
+    .disc.framed :global(.cover) {
+        border-radius: 50%;
+    }
     /* Sits inside the Halo shader's ring (radius 0.25 of the short side). */
     .disc {
         position: absolute;
@@ -458,6 +650,7 @@
     }
     .vis-bottom {
         position: absolute;
+        z-index: 3;
         left: 0;
         right: 0;
         bottom: 0;

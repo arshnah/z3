@@ -13,6 +13,7 @@
     import { playerState } from "$lib/state/player.svelte";
     import { searchState } from "$lib/state/search.svelte";
     import { ui } from "$lib/state/ui.svelte";
+    import { liquidGlass } from "$lib/liquid-glass";
     import { createPlaylistWith } from "$lib/actions";
     import { debounce } from "$lib/utils";
     import { fly, scale } from "svelte/transition";
@@ -76,7 +77,7 @@
 </script>
 
 <div class="dock-wrap">
-    <nav class="dock" class:searching={onSearch}>
+    <nav class="dock" class:searching={onSearch} use:liquidGlass={{ enabled: ui.liquidGlass, depth: 10, blur: 9 }}>
         <a class="mark" href="/music" title="Zeta">ζ</a>
 
         <div class="arrows">
@@ -180,7 +181,7 @@
 <style>
     .dock-wrap {
         position: fixed;
-        top: 14px;
+        top: calc(var(--titlebar-h) + 8px);
         left: 50%;
         translate: -50% 0;
         z-index: 50;

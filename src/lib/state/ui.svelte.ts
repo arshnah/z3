@@ -1,12 +1,14 @@
 import { browser } from "$app/environment";
 
-export type NowPlayingMode = "lyrics" | "visualizer";
+/** "stage" layers live lyrics over the visualizer. */
+export type NowPlayingMode = "lyrics" | "stage" | "visualizer";
 export type SidePanel = "queue" | "lyrics" | null;
 
 const PREFS_KEY = "zeta:ui-prefs";
 
 interface UiPrefs {
     ambient: boolean;
+    liquidGlass: boolean;
     visualizerPack: string;
     sidePanel: SidePanel;
     sidebarCollapsed: boolean;
@@ -52,6 +54,7 @@ class UiStore {
     sidePanel = $state<SidePanel>(this.prefs.sidePanel ?? null);
     sidebarCollapsed = $state(!!this.prefs.sidebarCollapsed);
     ambient = $state(this.prefs.ambient !== false);
+    liquidGlass = $state(this.prefs.liquidGlass !== false);
     visualizerPack = $state(this.prefs.visualizerPack ?? "halo");
     shortcutsOpen = $state(false);
 
@@ -65,6 +68,7 @@ class UiStore {
         if (!browser) return;
         const prefs: UiPrefs = {
             ambient: this.ambient,
+            liquidGlass: this.liquidGlass,
             visualizerPack: this.visualizerPack,
             sidePanel: this.sidePanel,
             sidebarCollapsed: this.sidebarCollapsed,

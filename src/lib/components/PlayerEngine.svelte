@@ -411,8 +411,13 @@
     /* ----------------------------- Discord RPC ---------------------------- */
     // Discord draws the progress bar only with BOTH timestamps; presence
     // updates are rate-limited, so republish only on discrete events.
+    let rpcToken = 0;
+
     function publishRPC() {
         const track = playerState.currentTrack;
+        // Every publish invalidates any artwork lookup still in flight, so a
+        // slow one can't land after a newer track's (or after a pause).
+        const token = ++rpcToken;
         if (!track || playerState.paused) {
             client.clearRPC().catch(() => {});
             return;
@@ -420,24 +425,39 @@
         const position = playerState.currentTime || 0;
         const total = playerState.duration || track.duration || 0;
         const now = Date.now();
-        // Discord fetches the image itself, so only a real web URL works.
-        const art = updateThumbnailUrl(track.thumbnails.find((t) => /^https?:/.test(t.url ?? ""))?.url);
+        // Discord fetches the image itself, so only a real web URL works; the
+        // biggest one is the least blurry. Library songs usually have no web
+        // URL at all (their cover is embedded), so the backend falls back to
+        // the song's public YouTube thumbnail using its video id.
+        const urls = [
+            ...new Set(
+                track.thumbnails
+                    .filter((t) => /^https?:/.test(t.url ?? ""))
+                    .sort((a, b) => (a.width ?? a.height ?? 0) - (b.width ?? b.height ?? 0))
+                    .reverse()
+                    .map((t) => updateThumbnailUrl(t.url)),
+            ),
+        ];
 
         client
-            .setRPC({
-                type: 2, // Listening
-                details: track.title,
-                state: artistNames(track),
-                name: track.title,
-                startTimestamp: Math.round(now - position * 1000),
-                ...(total > 0 ? { endTimestamp: Math.round(now + Math.max(0, total - position) * 1000) } : {}),
-                largeImageUrl: art,
-                largeImageKey: art,
-                smallImageText: "Zeta Music",
-                smallImageUrl: "zeta",
-                smallImageKey: "zeta",
+            .rpcArtwork(track.id, urls)
+            .then((art) => {
+                if (token !== rpcToken) return;
+                return client.setRPC({
+                    type: 2, // Listening
+                    details: track.title,
+                    state: artistNames(track),
+                    name: track.title,
+                    startTimestamp: Math.round(now - position * 1000),
+                    ...(total > 0 ? { endTimestamp: Math.round(now + Math.max(0, total - position) * 1000) } : {}),
+                    largeImageUrl: art,
+                    largeImageKey: art,
+                    smallImageText: "Zeta Music",
+                    smallImageUrl: "zeta",
+                    smallImageKey: "zeta",
+                });
             })
-            ?.catch(console.error);
+            .catch(console.error);
     }
 
     $effect(() => {
@@ -507,7 +527,12 @@
         else if (k === "q") ui.toggleSidePanel("queue");
         else if (k === "y") ui.toggleSidePanel("lyrics");
         else if (k === "f" && playerState.currentTrack) ui.nowPlayingOpen = !ui.nowPlayingOpen;
-        else if (k === "v" && playerState.currentTrack) ui.openNowPlaying(ui.nowPlayingOpen && ui.nowPlayingMode === "visualizer" ? "lyrics" : "visualizer");
+        else if (k === "v" && playerState.currentTrack) {
+            // Cycle lyrics → stage → visualizer, then wrap around.
+            const order = ["lyrics", "stage", "visualizer"] as const;
+            const next = order[(order.indexOf(ui.nowPlayingMode) + 1) % order.length];
+            ui.openNowPlaying(ui.nowPlayingOpen ? next : "visualizer");
+        }
         else if (k === "/") {
             goto("/music/search").then(() => document.querySelector<HTMLInputElement>("#search-input")?.focus());
         } else if (k === "?") ui.shortcutsOpen = !ui.shortcutsOpen;

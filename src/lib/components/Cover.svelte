@@ -1,6 +1,7 @@
 <script lang="ts">
     import type { Thumbnail } from "$lib/schema";
     import { createPlaceholderUrl, getThumbnailUrl, updateThumbnailUrl } from "$lib/utils";
+    import { untrack } from "svelte";
 
     interface Props {
         thumbnails?: Thumbnail[];
@@ -24,22 +25,33 @@
     const source = $derived(src ? updateThumbnailUrl(src) : getThumbnailUrl(thumbnails, title));
     const url = $derived(failed ? createPlaceholderUrl({ text: title }) : source);
 
-    // A new image resets the fade-in / error state.
+    let image = $state<HTMLImageElement>();
+
+    function markLoaded(img: HTMLImageElement) {
+        letterboxed = Math.abs(img.naturalWidth / img.naturalHeight - 4 / 3) < 0.02 && img.naturalWidth <= 640;
+        loaded = true;
+    }
+
+    // A new image resets the fade-in / error state. Blob and cached images can
+    // finish decoding before this effect runs, in which case no `load` event is
+    // coming — pick up the already-decoded image instead of staying blank.
     $effect(() => {
         void src;
         void thumbnails;
         failed = false;
-        loaded = false;
         retry = 0;
+        // Read the node untracked: recreating the <img> for a retry must not
+        // re-run this effect (and reset the retry it just made).
+        const img = untrack(() => image);
+        if (img?.complete && img.naturalWidth > 0) markLoaded(img);
+        else loaded = false;
     });
 
     // YouTube's 4:3 "hqdefault" frames have black bars baked in around a 16:9
     // picture; zoom past them so covers aren't letterboxed.
     let letterboxed = $state(false);
     function onLoad(e: Event) {
-        const img = e.currentTarget as HTMLImageElement;
-        letterboxed = Math.abs(img.naturalWidth / img.naturalHeight - 4 / 3) < 0.02 && img.naturalWidth <= 640;
-        loaded = true;
+        markLoaded(e.currentTarget as HTMLImageElement);
     }
 
     function onError() {
@@ -62,6 +74,7 @@
     <!-- Re-keying on retry recreates the <img>, which issues a fresh request. -->
     {#key `${url}#${retry}`}
         <img
+            bind:this={image}
             src={url}
             alt=""
             draggable="false"

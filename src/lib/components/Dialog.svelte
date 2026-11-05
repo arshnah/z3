@@ -1,5 +1,6 @@
 <script lang="ts">
     import { ui } from "$lib/state/ui.svelte";
+    import { liquidGlass } from "$lib/liquid-glass";
     import { fade, scale } from "svelte/transition";
 
     let value = $state("");
@@ -33,6 +34,7 @@
     <div class="backdrop" transition:fade={{ duration: 180 }} onclick={(e) => e.target === e.currentTarget && close(null)}>
         <form
             class="dialog glass"
+            use:liquidGlass={{ enabled: ui.liquidGlass, depth: 12, blur: 12 }}
             onsubmit={submit}
             onkeydown={(e) => e.key === "Escape" && (e.stopPropagation(), close(null))}
             transition:scale={{ start: 0.92, duration: 260, opacity: 0 }}

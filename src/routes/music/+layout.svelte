@@ -4,6 +4,7 @@
     import Dock from "$lib/components/Dock.svelte";
     import PlayerCapsule from "$lib/components/PlayerCapsule.svelte";
     import NowPlaying from "$lib/components/NowPlaying.svelte";
+    import TitleBar from "$lib/components/TitleBar.svelte";
     import SidePanel from "$lib/components/SidePanel.svelte";
     import ContextMenu from "$lib/components/ContextMenu.svelte";
     import Dialog from "$lib/components/Dialog.svelte";
@@ -23,8 +24,10 @@
 
 <AmbientBackground
     intensity={ui.nowPlayingOpen ? 1 : 0}
-    hidden={ui.nowPlayingOpen && ui.nowPlayingMode === "visualizer"}
+    hidden={ui.nowPlayingOpen && ui.nowPlayingMode !== "lyrics"}
 />
+
+<TitleBar hidden={ui.nowPlayingOpen} />
 
 <div class="world" class:behind={ui.nowPlayingOpen} class:panel-open={!!ui.sidePanel}>
     <main bind:this={main}>
@@ -73,8 +76,8 @@
         overflow-y: auto;
         overflow-x: hidden;
         /* room for the floating dock and player capsule */
-        padding: 88px 0 120px;
-        scroll-padding-top: 88px;
+        padding: calc(var(--titlebar-h) + 74px) 0 120px;
+        scroll-padding-top: calc(var(--titlebar-h) + 74px);
         transition: padding-right 0.45s var(--ease-out);
     }
     /* make room for the floating queue/lyrics island on wide screens */

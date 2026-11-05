@@ -60,8 +60,51 @@
     --panel-w: 348px;
     --bar-h: 88px;
 
+    /* Window chrome. The OS title bar is hidden; the app draws its own bar
+       (TitleBar.svelte) and window controls are native overlays. */
+    --titlebar-h: 36px;
+    /* Space taken by the native window buttons: traffic lights on the left on
+       macOS, minimise/maximise/close on the right elsewhere. On Windows and
+       Linux the Window Controls Overlay reports its own width; the minimum
+       covers it when the platform doesn't. */
+    --wc-left: 0px;
+    --wc-right: 0px;
+    --window-radius: 12px;
+
     transition: --accent 1.2s var(--ease-in-out), --art-1 1.6s var(--ease-in-out), --art-2 1.6s var(--ease-in-out),
         --art-3 1.6s var(--ease-in-out);
+}
+
+[data-os="mac"] {
+    --wc-left: 78px;
+}
+[data-os="win"] {
+    --wc-right: calc(100vw - env(titlebar-area-width, calc(100vw - 138px)));
+}
+/* Linux draws its own window buttons (see TitleBar.svelte). */
+[data-os="linux"] {
+    --wc-right: 116px;
+}
+
+/* Linux: a transparent window around a rounded, clipped app shell, since the
+   window manager doesn't round frameless windows. */
+[data-os="linux"] html,
+[data-os="linux"] body {
+    background: transparent;
+}
+#shell {
+    height: 100%;
+}
+[data-os="linux"] #shell {
+    background: var(--bg);
+    border-radius: var(--window-radius);
+    /* Also makes fixed-position layers relative to the shell, so they're clipped too. */
+    clip-path: inset(0 round var(--window-radius));
+}
+[data-maximized="true"] #shell,
+[data-maximized="true"] {
+    border-radius: 0;
+    clip-path: none;
 }
 
 *,

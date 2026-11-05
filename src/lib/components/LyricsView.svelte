@@ -6,7 +6,7 @@
     import { bracketedRuns } from "$lib/utils";
     import { onMount, tick } from "svelte";
 
-    let { compact = false }: { compact?: boolean } = $props();
+    let { compact = false, center = false }: { compact?: boolean; center?: boolean } = $props();
 
     let container = $state<HTMLDivElement>();
     let column = $state<HTMLDivElement>();
@@ -147,7 +147,7 @@
     let fillState: number[] = [];
 </script>
 
-<div class="lyrics" class:compact class:manual bind:this={container} onwheel={onWheel}>
+<div class="lyrics" class:compact class:center class:manual bind:this={container} onwheel={onWheel}>
     {#if lines.length}
         <div class="column" bind:this={column}>
             {#each lines as line, i (i)}
@@ -224,6 +224,15 @@
     .compact {
         --size: 22px;
         mask-image: linear-gradient(180deg, transparent 0%, #000 8%, #000 82%, transparent 100%);
+    }
+    /* Centred lines, for the lyrics-over-visualizer stage. */
+    .center .column {
+        align-items: center;
+    }
+    .center .line {
+        text-align: center;
+        margin-left: 0;
+        transform-origin: center;
     }
     .column {
         display: flex;

@@ -17,6 +17,7 @@ import { mintPoToken } from '../lib/potoken';
 import { MetadataStore, embedMp4Tags, readAudioTags, type IndexRecord } from '../lib/metadata';
 import { buildMuzzaBackup, parseMuzzaBackup, readMuzzaEventsFromDb, type MuzzaEvent } from '../lib/muzza';
 import { StatsStore } from '../lib/stats';
+import { lyricsfileToLrc } from '../lib/lyricsfile';
 
 const DEBUG = !!process.env.ZETA_DEBUG;
 function log(...args: any[]) {
@@ -789,39 +790,109 @@ async function fetchNeteaseWordLyrics(track: Song): Promise<string | null> {
 }
 const SYNCED_LRC = /\[\d{1,2}:\d{2}(?:[.:]\d{1,3})?\]/; // looks like [mm:ss.xx]
 
-/** Query lrclib for a track. Prefers an exact get, then a fuzzy search. */
-async function fetchLrclib(track: Song): Promise<{ synced?: string; plain?: string } | null> {
-    const artist = track.artists.map((a) => a.name).join(', ');
-    const enc = encodeURIComponent;
+/**
+ * One lrclib record. `lyricsfile` (its Lyricsfile YAML) is the only field that
+ * can hold word timings: `syncedLyrics` is always line-level, even when
+ * `hasWordSync` is true.
+ */
+interface LrclibRecord {
+    id: number;
+    trackName: string;
+    artistName: string;
+    duration: number;
+    instrumental: boolean;
+    hasWordSync?: boolean;
+    plainLyrics: string | null;
+    syncedLyrics: string | null;
+    lyricsfile?: string | null;
+}
 
-    try {
-        const res = await fetch(
-            `https://lrclib.net/api/get?artist_name=${enc(artist)}&track_name=${enc(track.title)}&duration=${Math.round(track.duration)}`,
-            { headers: LRCLIB_HEADERS },
-        );
-        if (res.ok) {
-            const d = (await res.json()) as any;
-            if (d.syncedLyrics || d.plainLyrics) return { synced: d.syncedLyrics || undefined, plain: d.plainLyrics || undefined };
-        }
-    } catch {
-        /* fall through to search */
-    }
+interface LrclibLyrics {
+    /** Word-by-word timings, converted from the record's Lyricsfile to enhanced LRC. */
+    wordSynced?: string;
+    synced?: string;
+    plain?: string;
+}
 
+/** Do a record's title, artist and duration describe this track? */
+function isLrclibMatch(record: LrclibRecord, track: Song): boolean {
+    const title = comparable(track.title);
+    const theirTitle = comparable(String(record.trackName ?? ''));
+    // One may carry a suffix the other lacks ("feat. …", " - Remastered").
+    if (!title || !theirTitle || (!theirTitle.includes(title) && !title.includes(theirTitle))) return false;
+
+    const artists = track.artists.map((a) => comparable(a.name)).filter(Boolean);
+    const theirs = comparable(String(record.artistName ?? ''));
+    if (artists.length && !artists.some((a) => theirs.includes(a) || a.includes(theirs))) return false;
+
+    // YouTube's metadata is normally within a second or two; this only keeps
+    // clearly different versions (live, extended, another song entirely) apart.
+    if (track.duration && record.duration && Math.abs(record.duration - track.duration) > 5) return false;
+    return true;
+}
+
+async function lrclibRequest(path: string): Promise<unknown> {
     try {
-        const res = await fetch(`https://lrclib.net/api/search?track_name=${enc(track.title)}&artist_name=${enc(artist)}`, {
+        const res = await fetch(`https://lrclib.net/api/${path}`, {
             headers: LRCLIB_HEADERS,
+            signal: AbortSignal.timeout(8000),
         });
-        if (res.ok) {
-            const arr = (await res.json()) as any[];
-            const synced = arr.find((x) => x.syncedLyrics)?.syncedLyrics;
-            const plain = arr.find((x) => x.plainLyrics)?.plainLyrics;
-            if (synced || plain) return { synced: synced || undefined, plain: plain || undefined };
-        }
+        if (!res.ok) return null; // includes 404 (no record) and 429 (rate limited)
+        return await res.json();
     } catch {
-        /* ignore */
+        return null;
+    }
+}
+
+/**
+ * Query lrclib for a track, preferring word-synced lyrics over line-synced over
+ * plain.
+ *
+ * `/api/get` needs the exact artist spelling, duration within ±2s and the
+ * title to match, so it regularly misses; its `/api/search` is keyword-based
+ * and its artist matching is case-sensitive in practice. Try the signature
+ * lookup first, then search by title and by the artist's name, and keep only
+ * records that actually describe this track.
+ */
+async function fetchLrclib(track: Song): Promise<LrclibLyrics | null> {
+    const enc = encodeURIComponent;
+    const artist = track.artists[0]?.name ?? '';
+    const duration = track.duration ? `&duration=${Math.round(track.duration)}` : '';
+    const records: LrclibRecord[] = [];
+    const add = (record: LrclibRecord) => {
+        if (isLrclibMatch(record, track) && !records.some((r) => r.id === record.id)) records.push(record);
+    };
+
+    if (artist) {
+        const exact = (await lrclibRequest(
+            `get?artist_name=${enc(artist)}&track_name=${enc(track.title)}${duration}`,
+        )) as LrclibRecord | null;
+        if (exact) add(exact);
     }
 
-    return null;
+    if (!records.length) {
+        const byTitle = (await lrclibRequest(`search?track_name=${enc(track.title)}`)) as LrclibRecord[] | null;
+        for (const record of Array.isArray(byTitle) ? byTitle : []) add(record);
+        // `q` matches artist/title/album; ask for the artist alone rather than
+        // "title artist", which lrclib struggles to match as a phrase.
+        const byArtist = artist ? ((await lrclibRequest(`search?q=${enc(artist.toLowerCase())}`)) as LrclibRecord[] | null) : null;
+        for (const record of Array.isArray(byArtist) ? byArtist : []) add(record);
+    }
+
+    if (!records.length) return null;
+
+    const quality = (r: LrclibRecord) =>
+        (r.hasWordSync && r.lyricsfile ? 4 : 0) + (r.syncedLyrics ? 2 : 0) + (r.plainLyrics ? 1 : 0);
+    const distance = (r: LrclibRecord) => Math.abs((r.duration || track.duration) - track.duration);
+    records.sort((a, b) => quality(b) - quality(a) || distance(a) - distance(b));
+    const best = records[0];
+
+    const wordSynced = best.hasWordSync && best.lyricsfile ? lyricsfileToLrc(best.lyricsfile) : null;
+    const lyrics: LrclibLyrics = {};
+    if (wordSynced) lyrics.wordSynced = wordSynced;
+    if (best.syncedLyrics) lyrics.synced = best.syncedLyrics;
+    if (best.plainLyrics) lyrics.plain = best.plainLyrics;
+    return lyrics;
 }
 
 // undefined = not yet probed, null = unavailable, string = the python command.
@@ -888,11 +959,11 @@ export const routes = {
     /**
      * Resolve lyrics for a track, preferring the most precise timing available.
      *
-     * Sources, in order: NetEase word-by-word lyrics (enhanced LRC); lrclib
-     * (exact get, then fuzzy search); then — if a python with the
-     * `syncedlyrics` package is available — its aggregated providers; finally
-     * any plain lyrics found. Embedded lyrics stored on the track (e.g.
-     * imported from Muzza) are handled on the frontend.
+     * Sources, in order: NetEase word-by-word lyrics (enhanced LRC); lrclib's
+     * Lyricsfile when the record is word-synced, then its ordinary line-synced
+     * LRC; then — if a python with the `syncedlyrics` package is available —
+     * its aggregated providers; finally any plain lyrics found. Embedded lyrics
+     * stored on the track (e.g. imported from Muzza) are handled on the frontend.
      */
     async musicLyrics(track: Song): Promise<string | null> {
         try {
@@ -903,6 +974,9 @@ export const routes = {
             if (words) return words;
 
             const lrc = await fetchLrclib(track);
+            // Word timings only exist in lrclib's Lyricsfile; its `syncedLyrics`
+            // field is line-level even for word-synced records.
+            if (lrc?.wordSynced) return lrc.wordSynced;
             if (lrc?.synced) return lrc.synced;
 
             const query = `${track.title} ${track.artists.map((a) => a.name).join(' ')}`.trim();

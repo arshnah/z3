@@ -1,4 +1,4 @@
-import { BrowserWindow, dialog } from 'electron';
+import { BrowserWindow, dialog, screen } from 'electron';
 
 import type { routes as MusicRoutes } from './music';
 import { routes as mpris } from './mpris';
@@ -98,16 +98,117 @@ const dialogs = {
     },
 };
 
+/* ------------------------------ window chrome ----------------------------- */
+// On Linux the OS title bar and its window buttons are gone, so the renderer
+// draws its own (TitleBar.svelte) and calls these. Edge resizing is driven from
+// here too, because a frameless transparent window has no native resize border.
+
+function appWindow(): BrowserWindow | null {
+    const win = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
+    return win && !win.isDestroyed() ? win : null;
+}
+
+let resizing: { edge: string; from: ReturnType<BrowserWindow['getBounds']>; start: { x: number; y: number } } | null =
+    null;
+
+const windowChrome = {
+    async windowMinimize(): Promise<void> {
+        appWindow()?.minimize();
+    },
+    async windowMaximizeToggle(): Promise<boolean> {
+        const win = appWindow();
+        if (!win) return false;
+        const maximised = win.isMaximized();
+        if (maximised) win.unmaximize();
+        else win.maximize();
+        return !maximised;
+    },
+    async windowClose(): Promise<void> {
+        appWindow()?.close();
+    },
+    async windowIsMaximized(): Promise<boolean> {
+        return appWindow()?.isMaximized() ?? false;
+    },
+    async windowResizeStart(edge: string): Promise<void> {
+        const win = appWindow();
+        if (!win) return;
+        resizing = { edge, from: win.getBounds(), start: screen.getCursorScreenPoint() };
+    },
+    /** Called as the pointer moves; the renderer sends screen coordinates. */
+    async windowResizeMove(x: number, y: number): Promise<void> {
+        const win = appWindow();
+        if (!win || !resizing || win.isDestroyed()) return;
+        const { edge, from, start } = resizing;
+        const [minW, minH] = win.getMinimumSize();
+        const dx = x - start.x;
+        const dy = y - start.y;
+        let { x: left, y: top, width, height } = from;
+        if (edge.includes('e')) width = Math.max(minW, from.width + dx);
+        if (edge.includes('s')) height = Math.max(minH, from.height + dy);
+        if (edge.includes('w')) {
+            width = Math.max(minW, from.width - dx);
+            left = from.x + from.width - width;
+        }
+        if (edge.includes('n')) {
+            height = Math.max(minH, from.height - dy);
+            top = from.y + from.height - height;
+        }
+        win.setBounds({ x: left, y: top, width, height });
+    },
+    async windowResizeEnd(): Promise<void> {
+        resizing = null;
+    },
+};
+
 /* ------------------------------- Discord RPC ------------------------------ */
 
 const rpc = new Client({ clientId: '1499408750526595152' });
 
 rpc.login().catch(err => console.warn("Discord RPC failed to connect (is Discord running?):", err));
 
+/**
+ * Discord's servers fetch rich-presence artwork themselves, so only a public
+ * http(s) URL can be shown. Library songs usually only carry their embedded
+ * cover (`zeta-cover://…`), which Discord can't reach, so the presence fell
+ * back to the app icon. They do remember the YouTube video they came from,
+ * though, and that video's thumbnail is public. Use the sharpest one that
+ * actually exists: maxres is missing on older/low-res uploads, and `mqdefault`
+ * always exists (16:9, no letterbox bars).
+ */
+const ytArtCache = new Map<string, string>();
+const YT_VARIANTS = ['maxresdefault', 'hq720', 'mqdefault'] as const;
+
+async function youtubeArtwork(videoId: string): Promise<string> {
+    const cached = ytArtCache.get(videoId);
+    if (cached !== undefined) return cached;
+    for (const variant of YT_VARIANTS) {
+        const url = `https://i.ytimg.com/vi/${encodeURIComponent(videoId)}/${variant}.jpg`;
+        try {
+            const res = await fetch(url, { method: 'HEAD', signal: AbortSignal.timeout(4000) });
+            if (!res.ok) continue;
+            if (ytArtCache.size > 500) ytArtCache.delete(ytArtCache.keys().next().value as string);
+            ytArtCache.set(videoId, url);
+            return url;
+        } catch {
+            /* try the next variant */
+        }
+    }
+    ytArtCache.set(videoId, '');
+    return '';
+}
+
 export const routes = {
+    ...windowChrome,
     async clearRPC() {
         if (!rpc.user) return;
         await rpc.user.clearActivity();
+    },
+    /** The best public image for a track: a remote thumbnail if it has one, else its YouTube artwork. */
+    async rpcArtwork(trackId: string, urls: string[]): Promise<string> {
+        const remote = urls.find((url) => /^https?:\/\//i.test(url));
+        if (remote) return remote;
+        if (trackId.startsWith('yt:')) return youtubeArtwork(trackId.slice(3));
+        return '';
     },
     async setRPC(activity: SetActivity): Promise<SetActivityResponse | null> {
         if (!rpc.user) return null;

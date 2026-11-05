@@ -67,6 +67,22 @@
             </div>
             <div class="row">
                 <div>
+                    <strong>Liquid glass</strong>
+                    <p>Refracting glass for the dock, player and panels. Turn off for plain frosted glass.</p>
+                </div>
+                <button
+                    class="switch"
+                    role="switch"
+                    aria-label="Liquid glass"
+                    aria-checked={ui.liquidGlass}
+                    onclick={() => {
+                        ui.liquidGlass = !ui.liquidGlass;
+                        ui.save();
+                    }}
+                ></button>
+            </div>
+            <div class="row">
+                <div>
                     <strong>Visualizer</strong>
                     <p>Which visualizer opens in the full-screen player.</p>
                 </div>

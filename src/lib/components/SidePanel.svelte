@@ -16,6 +16,7 @@
         startRadio,
     } from "$lib/state/player.svelte";
     import { ui } from "$lib/state/ui.svelte";
+    import { liquidGlass } from "$lib/liquid-glass";
     import { trackMenu } from "$lib/actions";
     import { artistNames, formatTime } from "$lib/utils";
     import { flip } from "svelte/animate";
@@ -63,7 +64,7 @@
     </div>
 {/snippet}
 
-<aside class="panel" transition:fly={{ x: 60, duration: 420, opacity: 0 }}>
+<aside class="panel" use:liquidGlass={{ enabled: ui.liquidGlass, depth: 16, blur: 11 }} transition:fly={{ x: 60, duration: 420, opacity: 0 }}>
     <header>
         <div class="segmented">
             <button aria-pressed={ui.sidePanel === "queue"} onclick={() => (ui.sidePanel = "queue")}>
@@ -175,7 +176,7 @@
     .panel {
         position: fixed;
         z-index: 40;
-        top: 84px;
+        top: calc(var(--titlebar-h) + 78px);
         right: 16px;
         bottom: 104px;
         display: flex;

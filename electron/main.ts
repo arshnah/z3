@@ -41,10 +41,28 @@ protocol.registerSchemesAsPrivileged([
 
 function createWindow() {
 	const dev = process.env.VITE_DEV_SERVER_URL;
+	// The OS title bar is gone everywhere and the renderer draws its own chrome
+	// (see TitleBar.svelte). macOS keeps its native traffic lights inset into
+	// our bar and Windows keeps the standard buttons as a transparent overlay.
+	// Linux's overlay can't be transparent (it paints an opaque box) and its
+	// window managers rarely round frameless windows, so there the app draws its
+	// own buttons and the window is transparent around a rounded, clipped shell.
+	const mac = process.platform === 'darwin';
+	const linux = process.platform === 'linux';
 
 	const win = new BrowserWindow({
 		width: 1200,
 		height: 800,
+		minWidth: 880,
+		minHeight: 600,
+		show: false,
+		backgroundColor: linux ? '#00000000' : '#07060b',
+		frame: linux ? false : true,
+		transparent: linux,
+		titleBarStyle: mac ? 'hiddenInset' : linux ? undefined : 'hidden',
+		trafficLightPosition: mac ? { x: 18, y: 14 } : undefined,
+		titleBarOverlay: mac || linux ? undefined : { color: '#00000000', symbolColor: '#f5f3fb', height: 36 },
+		roundedCorners: true,
 		webPreferences: {
 			preload: join(__dirname, '../dist-electron/preload.mjs'),
 		},
@@ -52,6 +70,8 @@ function createWindow() {
 	});
 
 	win.removeMenu();
+	// Avoid the white flash before the first paint on launch.
+	win.once('ready-to-show', () => win.show());
 
 	if (dev) {
 		win.loadURL(dev);

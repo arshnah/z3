@@ -1,6 +1,7 @@
 <script lang="ts">
     import Icon from "$lib/components/Icon.svelte";
     import { ui, type MenuItem } from "$lib/state/ui.svelte";
+    import { liquidGlass } from "$lib/liquid-glass";
     import { tick } from "svelte";
     import { scale } from "svelte/transition";
 
@@ -90,6 +91,7 @@
     <div class="catcher" onclick={() => ui.closeMenu()} oncontextmenu={(e) => { e.preventDefault(); ui.closeMenu(); }}></div>
     <div
         class="menu glass"
+        use:liquidGlass={{ enabled: ui.liquidGlass, depth: 7, blur: 10 }}
         bind:this={menuEl}
         style:left="{pos.x}px"
         style:top="{pos.y}px"
