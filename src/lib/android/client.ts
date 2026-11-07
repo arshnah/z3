@@ -3,11 +3,10 @@ import { Directory, Filesystem } from '@capacitor/filesystem';
 import { FileTransfer } from '@capacitor/file-transfer';
 import type { Routes } from '../../../electron/main';
 import type { Library, Song, Stream } from '../schema';
-import { AndroidStorage, MUSIC_PATH, rememberSong, requirePlaylist, type StoredSong } from './storage';
+import { androidStorage as storage, MUSIC_PATH, rememberSong, requirePlaylist, type StoredSong } from './storage';
 import * as providers from './providers';
 import { androidScrobbling } from './scrobbling';
 
-const storage = new AndroidStorage();
 type LocatedSong = StoredSong & { directory: Directory };
 const downloads = new Map<string, Promise<LocatedSong>>();
 const temporary = new Map<string, LocatedSong>();
@@ -115,6 +114,26 @@ export const androidClient: Routes = {
     async musicSearch(query, provider) {
         const data = await storage.snapshot();
         return cacheSongs((await providers.search(query, provider)).map((song) => ({ ...song, isDownloaded: !!data.songs[song.id]?.file })));
+    },
+    musicSearchExtras: providers.searchExtras,
+    async musicArtist(idOrQuery, nameHint) {
+        const data = await storage.snapshot();
+        const downloaded = new Set(Object.values(data.songs).filter((s) => s.file).map((s) => s.song.id));
+        const res = await providers.artist(idOrQuery, nameHint, downloaded);
+        cacheSongs(res.topSongs);
+        return res;
+    },
+    async musicArtistSongs(artistId, nameHint) {
+        const data = await storage.snapshot();
+        const downloaded = new Set(Object.values(data.songs).filter((s) => s.file).map((s) => s.song.id));
+        return cacheSongs(await providers.artistSongs(artistId, nameHint, downloaded));
+    },
+    async musicCollection(id) {
+        const data = await storage.snapshot();
+        const downloaded = new Set(Object.values(data.songs).filter((s) => s.file).map((s) => s.song.id));
+        const res = await providers.collection(id, downloaded);
+        cacheSongs(res.tracks);
+        return res;
     },
     musicSearchSuggestions: providers.suggestions,
     musicLyrics: providers.lyrics,

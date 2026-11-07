@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { AndroidStorage, emptyLibrary, requirePlaylist, rememberSong, FAVOURITES_ID } from '../src/lib/android/storage.ts';
 import { summarize } from '../src/lib/android/stats.ts';
-import { musicText, youtubeArtistNames } from '../src/lib/music-metadata.ts';
+import { musicText, splitArtistCredits, youtubeArtistNames, youtubeArtists } from '../src/lib/music-metadata.ts';
 
 function memoryFilesystem(initial) {
     const files = new Map(initial === undefined ? [] : [['zeta/library.json', initial]]);
@@ -93,4 +93,34 @@ test('provider metadata uses readable entities and logged-out artist text', () =
     assert.deepEqual(youtubeArtistNames({ flex_columns: [{ title: 'Air' }, { title: 'Orchestra • Bach • 4:12' }] }), ['Orchestra']);
     assert.deepEqual(youtubeArtistNames({ authors: [{ name: 'A &amp; B' }] }), ['A & B']);
     assert.deepEqual(youtubeArtistNames({ flex_columns: [{ title: 'Air' }, { title: '4:12' }] }), []);
+    assert.deepEqual(
+        youtubeArtists({
+            artists: [
+                { name: 'Daft Punk', channel_id: 'UCRr1xG_2WIDs18a6cIiCxeA' },
+                { name: 'Julian Casablancas', endpoint: { payload: { browseId: 'UCWhpbdGLnR8XtXLr0yl2nYA' } } },
+            ],
+        }),
+        [
+            { id: 'yt:UCRr1xG_2WIDs18a6cIiCxeA', name: 'Daft Punk', thumbnails: [] },
+            { id: 'yt:UCWhpbdGLnR8XtXLr0yl2nYA', name: 'Julian Casablancas', thumbnails: [] },
+        ],
+    );
+    assert.deepEqual(
+        splitArtistCredits([{ name: 'K-391, Alan Walker, & Ahrix' }]).map((c) => [c.name, c.sep]),
+        [
+            ['K-391', ', '],
+            ['Alan Walker', ', & '],
+            ['Ahrix', ''],
+        ],
+    );
+    assert.deepEqual(
+        splitArtistCredits([
+            { id: 'yt:UC1', name: 'Alan Walker' },
+            { id: 'yt:UC2', name: 'Ava Max' },
+        ]).map((c) => [c.id, c.name, c.sep]),
+        [
+            ['yt:UC1', 'Alan Walker', ', '],
+            ['yt:UC2', 'Ava Max', ''],
+        ],
+    );
 });

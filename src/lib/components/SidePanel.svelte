@@ -3,6 +3,7 @@
     import Cover from "$lib/components/Cover.svelte";
     import EqBars from "$lib/components/EqBars.svelte";
     import LyricsView from "$lib/components/LyricsView.svelte";
+    import ArtistLinks from "$lib/components/ArtistLinks.svelte";
     import {
         playerState,
         getUpcomingContext,
@@ -48,13 +49,13 @@
             if (dragFrom !== null && dragOver !== null && dragFrom !== dragOver) moveInQueue(dragFrom, dragOver);
             dragFrom = dragOver = null;
         }}
-        onclick={(e) => !(e.target as HTMLElement).closest("button") && onplay()}
+        onclick={(e) => !(e.target as HTMLElement).closest("button, a") && onplay()}
         oncontextmenu={(e) => ui.openMenu(e, trackMenu(song))}
     >
         <Cover thumbnails={song.thumbnails} title={song.title} size={42} radius="var(--r-xs)" />
         <span class="q-text">
             <span class="q-title ellipsis">{song.title}</span>
-            <span class="q-artist ellipsis">{artistNames(song)}</span>
+            <span class="q-artist ellipsis"><ArtistLinks artists={song.artists} providerHint={song.id.startsWith("js:") ? "js" : "yt"} /></span>
         </span>
         {#if extra?.remove}
             <button class="icon-btn sm q-x" title="Remove from queue" onclick={extra.remove}><Icon name="x" /></button>
@@ -96,7 +97,7 @@
                         <Cover thumbnails={track.thumbnails} title={track.title} size={48} radius="var(--r-xs)" />
                         <span class="q-text">
                             <span class="q-title ellipsis">{track.title}</span>
-                            <span class="q-artist ellipsis">{artistNames(track)}</span>
+                            <span class="q-artist ellipsis"><ArtistLinks artists={track.artists} providerHint={track.id.startsWith("js:") ? "js" : "yt"} /></span>
                         </span>
                         <EqBars paused={playerState.paused} />
                     </div>

@@ -1,6 +1,6 @@
 import { browser } from "$app/environment";
 import { client } from "$lib/ephaptic";
-import type { MusicProvider, Song } from "$lib/schema";
+import type { Artist, CollectionSummary, MusicProvider, Song } from "$lib/schema";
 
 const RECENT_KEY = "zeta:recent-searches";
 
@@ -10,6 +10,8 @@ class SearchStore {
     lastQuery = $state("");
     provider = $state<MusicProvider>("yt");
     results = $state<Song[]>([]);
+    artists = $state<Artist[]>([]);
+    albums = $state<CollectionSummary[]>([]);
     loading = $state(false);
     error = $state("");
     recent = $state<string[]>(browser ? JSON.parse(localStorage.getItem(RECENT_KEY) || "[]") : []);
@@ -23,10 +25,16 @@ class SearchStore {
         this.error = "";
         this.loading = true;
         const seq = ++this.seq;
+        const provider = $state.snapshot(this.provider);
         try {
-            const results = await client.musicSearch(q, $state.snapshot(this.provider));
+            const [results, extras] = await Promise.all([
+                client.musicSearch(q, provider),
+                client.musicSearchExtras(q, provider).catch(() => ({ artists: [], albums: [] })),
+            ]);
             if (seq !== this.seq) return; // a newer search superseded this one
             this.results = results;
+            this.artists = extras.artists;
+            this.albums = extras.albums;
             this.lastQuery = q;
             this.remember(q);
         } catch (err: any) {

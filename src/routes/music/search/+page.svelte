@@ -2,11 +2,12 @@
     import Icon from "$lib/components/Icon.svelte";
     import Cover from "$lib/components/Cover.svelte";
     import TrackList from "$lib/components/TrackList.svelte";
+    import MediaCard from "$lib/components/MediaCard.svelte";
+    import ArtistLinks from "$lib/components/ArtistLinks.svelte";
     import { searchState } from "$lib/state/search.svelte";
     import { playerState, playTrack, playPlaylist, togglePlay, addToQueue } from "$lib/state/player.svelte";
     import { ui } from "$lib/state/ui.svelte";
-    import { trackMenu, radioFrom } from "$lib/actions";
-    import { artistNames } from "$lib/utils";
+    import { trackMenu, radioFrom, openArtist, openCollection, playCollection, collectionMenu } from "$lib/actions";
     import { toasts } from "$lib/state/toast.svelte";
     import { tilt } from "$lib/tilt";
     import type { Playlist } from "$lib/schema";
@@ -30,6 +31,8 @@
     }
 
     const results = $derived(searchState.results);
+    const artists = $derived(searchState.artists);
+    const albums = $derived(searchState.albums);
     const top = $derived(results[0]);
     const topPlaying = $derived(!!top && playerState.currentTrack?.id === top.id);
 
@@ -63,13 +66,33 @@
             <h1 class="page-title">“{searchState.lastQuery}”</h1>
         </header>
 
+        {#if artists.length}
+            <section class="section artists-strip">
+                <div class="section-head">
+                    <h2 class="section-title">Artists</h2>
+                </div>
+                <div class="shelf artists-shelf">
+                    {#each artists as artist, i ((artist.id ?? artist.name) + ":" + i)}
+                        <MediaCard
+                            round
+                            title={artist.name}
+                            subtitle={artist.subtitle ?? "Artist"}
+                            thumbnails={artist.thumbnails}
+                            index={i}
+                            onclick={() => openArtist(artist, searchState.provider)}
+                        />
+                    {/each}
+                </div>
+            </section>
+        {/if}
+
         <div class="results-grid" class:stale={searchState.loading}>
             <!-- svelte-ignore a11y_click_events_have_key_events -->
             <div
                 class="top island"
                 role="button"
                 tabindex="0"
-                onclick={() => (topPlaying ? togglePlay() : playTrack(top))}
+                onclick={(e) => !(e.target as HTMLElement).closest("button, a") && (topPlaying ? togglePlay() : playTrack(top))}
                 oncontextmenu={(e) => ui.openMenu(e, trackMenu(top))}
             >
                 <div class="top-art" use:tilt={{ max: 12 }}>
@@ -78,7 +101,9 @@
                 </div>
                 <span class="kicker">Top result</span>
                 <h2 class="top-title" title={top.title}>{top.title}</h2>
-                <p class="muted ellipsis">{artistNames(top)}{#if top.album}{" · "}{top.album.title}{/if}</p>
+                <p class="muted ellipsis">
+                    <ArtistLinks artists={top.artists} album={top.album} showAlbum providerHint={searchState.provider} />
+                </p>
                 <div class="top-actions">
                     <button
                         class="play-btn"
@@ -108,9 +133,34 @@
                         <Icon name="list-end" /> Queue all
                     </button>
                 </div>
-                <TrackList tracks={results} showAlbum={false} onplay={(i) => playTrack(results[i])} />
+                <TrackList tracks={results} showAlbum={true} onplay={(i) => playTrack(results[i])} />
             </div>
         </div>
+
+        {#if albums.length}
+            <section class="section">
+                <div class="section-head">
+                    <h2 class="section-title">Albums & singles</h2>
+                </div>
+                <div class="shelf">
+                    {#each albums as col, i (col.id + ":" + i)}
+                        <MediaCard
+                            title={col.title}
+                            artists={col.artists}
+                            subtitle={col.year ?? (col.artists.length ? "" : col.subtitle ?? "")}
+                            providerHint={searchState.provider}
+                            thumbnails={col.thumbnails}
+                            index={i}
+                            playing={playerState.currentPlaylist?.id === `collection:${col.id}`}
+                            paused={playerState.paused}
+                            onclick={() => openCollection(col, col.artists[0]?.name)}
+                            onplay={() => playCollection(col)}
+                            oncontextmenu={(e) => ui.openMenu(e, collectionMenu(col))}
+                        />
+                    {/each}
+                </div>
+            </section>
+        {/if}
     {:else}
         <header class="results-head">
             <span class="kicker"><Icon name="compass" /> Discover</span>
@@ -151,7 +201,14 @@
         display: flex;
         flex-direction: column;
         gap: 10px;
-        padding: 18px 4px 26px;
+        padding: 18px 4px 16px;
+    }
+    .artists-strip {
+        margin-top: 4px;
+        margin-bottom: 26px;
+    }
+    .artists-shelf {
+        grid-auto-columns: 148px;
     }
     .results-head .page-title {
         overflow-wrap: anywhere;

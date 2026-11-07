@@ -3,6 +3,7 @@
     import Icon from "$lib/components/Icon.svelte";
     import Cover from "$lib/components/Cover.svelte";
     import TrackList from "$lib/components/TrackList.svelte";
+    import ArtistLinks from "$lib/components/ArtistLinks.svelte";
     import { page } from "$app/state";
     import { goto } from "$app/navigation";
     import { libraryState, FAVOURITES_ID } from "$lib/state/library.svelte";
@@ -257,7 +258,7 @@
                                         <Cover thumbnails={track.thumbnails} title={track.title} size={44} radius="12px" />
                                         <div class="rec-text">
                                             <span class="ellipsis rec-title">{track.title}</span>
-                                            <span class="ellipsis subtle">{artistNames(track)}</span>
+                                            <span class="ellipsis subtle"><ArtistLinks artists={track.artists} album={track.album} showAlbum /></span>
                                         </div>
                                         <button class="add" title="Add to playlist" onclick={() => addRec(track)}><Icon name="plus" /></button>
                                     </div>

@@ -2,13 +2,16 @@
     import Icon from "$lib/components/Icon.svelte";
     import Cover from "$lib/components/Cover.svelte";
     import EqBars from "$lib/components/EqBars.svelte";
-    import type { Thumbnail } from "$lib/schema";
+    import ArtistLinks from "$lib/components/ArtistLinks.svelte";
+    import type { Artist, MusicProvider, Thumbnail } from "$lib/schema";
     import type { Snippet } from "svelte";
     import { tilt } from "$lib/tilt";
 
     interface Props {
         title: string;
         subtitle?: string;
+        artists?: readonly { id?: string; name: string; thumbnails?: Artist["thumbnails"] }[] | null;
+        providerHint?: MusicProvider;
         src?: string | null;
         thumbnails?: Thumbnail[];
         onclick?: () => void;
@@ -21,7 +24,7 @@
         round?: boolean;
     }
 
-    let { title, subtitle = "", src, thumbnails, onclick, onplay, oncontextmenu, playing = false, paused = true, index = 0, art, round = false }: Props = $props();
+    let { title, subtitle = "", artists = null, providerHint, src, thumbnails, onclick, onplay, oncontextmenu, playing = false, paused = true, index = 0, art, round = false }: Props = $props();
 </script>
 
 <!-- svelte-ignore a11y_click_events_have_key_events -->
@@ -48,7 +51,11 @@
         {#if !round}
             <div class="label">
                 <span class="title ellipsis" {title}>{title}</span>
-                {#if subtitle}<span class="subtitle ellipsis">{subtitle}</span>{/if}
+                {#if artists?.length}
+                    <span class="subtitle ellipsis"><ArtistLinks {artists} {providerHint} />{#if subtitle}{" · "}{subtitle}{/if}</span>
+                {:else if subtitle}
+                    <span class="subtitle ellipsis">{subtitle}</span>
+                {/if}
             </div>
         {/if}
         {#if onplay}
@@ -68,7 +75,11 @@
     {#if round}
         <div class="round-label">
             <span class="title ellipsis" {title}>{title}</span>
-            {#if subtitle}<span class="subtitle ellipsis">{subtitle}</span>{/if}
+            {#if artists?.length}
+                <span class="subtitle ellipsis"><ArtistLinks {artists} {providerHint} />{#if subtitle}{" · "}{subtitle}{/if}</span>
+            {:else if subtitle}
+                <span class="subtitle ellipsis">{subtitle}</span>
+            {/if}
         </div>
     {/if}
 </div>

@@ -1,11 +1,11 @@
 import { Share } from '@capacitor/share';
 import { Directory, Filesystem } from '@capacitor/filesystem';
 import type { Song } from '../schema';
-import { AndroidStorage } from './storage';
+import { androidStorage } from './storage';
 
 export async function shareSong(song: Song) {
     const text = `${song.title} — ${song.artists.map((a) => a.name).join(', ')}`;
-    const stored = (await new AndroidStorage().snapshot()).songs[song.id];
+    const stored = (await androidStorage.snapshot()).songs[song.id];
     if (stored?.file) {
         const extensions: Record<string, string> = { 'audio/mpeg': 'mp3', 'audio/x-wav': 'wav', 'audio/wav': 'wav', 'audio/flac': 'flac', 'audio/ogg': 'ogg', 'audio/webm': 'webm' };
         const extension = extensions[stored.mimetype ?? ''] ?? 'm4a';

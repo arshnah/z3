@@ -2,6 +2,7 @@
     import Icon from "$lib/components/Icon.svelte";
     import Cover from "$lib/components/Cover.svelte";
     import MediaCard from "$lib/components/MediaCard.svelte";
+    import ArtistLinks from "$lib/components/ArtistLinks.svelte";
     import { libraryState, FAVOURITES_ID } from "$lib/state/library.svelte";
     import { playerState, playPlaylist, playTrack, togglePlay } from "$lib/state/player.svelte";
     import { statsState } from "$lib/state/stats.svelte";
@@ -67,7 +68,9 @@
                 <h1 class="page-title">{heroLive ? "Now playing" : "Pick up where you left off"}</h1>
                 <div class="now">
                     <span class="now-title ellipsis">{hero.title}</span>
-                    <span class="now-artist ellipsis">{artistNames(hero)}</span>
+                    <span class="now-artist ellipsis">
+                        <ArtistLinks artists={hero.artists} album={hero.album} showAlbum providerHint={hero.id.startsWith("js:") ? "js" : "yt"} />
+                    </span>
                 </div>
                 {#if heroLyric}
                     {#key heroLyric}<p class="lyric"><Icon name="mic-vocal" /><span>{heroLyric}</span></p>{/key}
@@ -139,7 +142,8 @@
                 {#each recent as song, i (song.id)}
                     <MediaCard
                         title={song.title}
-                        subtitle={artistNames(song)}
+                        artists={song.artists}
+                        providerHint={song.id.startsWith("js:") ? "js" : "yt"}
                         thumbnails={song.thumbnails}
                         index={i}
                         playing={playerState.currentTrack?.id === song.id}
@@ -164,7 +168,8 @@
                     <MediaCard
                         round
                         title={song.title}
-                        subtitle={artistNames(song)}
+                        artists={song.artists}
+                        providerHint={song.id.startsWith("js:") ? "js" : "yt"}
                         index={i}
                         onclick={() => radioFrom(song)}
                         onplay={() => radioFrom(song)}
@@ -191,7 +196,8 @@
                 {#each top as song, i (song.id)}
                     <MediaCard
                         title={song.title}
-                        subtitle={artistNames(song)}
+                        artists={song.artists}
+                        providerHint={song.id.startsWith("js:") ? "js" : "yt"}
                         thumbnails={song.thumbnails}
                         index={i}
                         playing={playerState.currentTrack?.id === song.id}

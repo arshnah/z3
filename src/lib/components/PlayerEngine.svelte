@@ -578,7 +578,7 @@
     }
 </script>
 
-<svelte:window onkeydown={onKey} onbeforeunload={() => { flushListen(); saveSession(); }} />
+<svelte:window onkeydown={onKey} onbeforeunload={() => { scrobbler.finish(); flushListen(); saveSession(); }} />
 
 {#if isAndroid}
 <AndroidPlayer

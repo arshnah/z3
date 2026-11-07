@@ -199,6 +199,47 @@ class LibraryStore {
         }
     }
 
+    /** Add a batch of tracks (e.g. an entire album) to a playlist. */
+    async addTracksToPlaylist(playlistId: string, tracks: Song[]): Promise<number> {
+        const playlist = this.byId.get(playlistId);
+        if (!playlist || !tracks.length) return 0;
+        const missing = tracks.filter((t) => !this.isInPlaylist(playlistId, t.id));
+        if (!missing.length) {
+            toasts.info(`All tracks are already in “${playlist.name}”.`);
+            return 0;
+        }
+        const toast = toasts.info(
+            `Adding ${missing.length} ${missing.length === 1 ? "song" : "songs"} to “${playlist.name}”…`,
+            0,
+        );
+        let added = 0;
+        try {
+            for (const track of missing) {
+                try {
+                    const plain = $state.snapshot(track) as Song;
+                    const saved = await client.musicPlaylistAddTrack(playlistId, plain);
+                    this.update(playlistId, (p) => ({
+                        ...p,
+                        tracks: p.tracks.some((t) => t.id === saved.id)
+                            ? p.tracks.map((t) => (t.id === saved.id ? saved : t))
+                            : [...p.tracks, saved],
+                        thumbnail: p.thumbnail || saved.thumbnails.find((t) => t.url)?.url,
+                    }));
+                    if (saved.isDownloaded) this.markDownloaded(saved.id, saved);
+                    added++;
+                } catch (err) {
+                    console.warn("Failed to add track to playlist:", err);
+                }
+            }
+            if (added === missing.length) toasts.success(`Added ${added} ${added === 1 ? "song" : "songs"} to “${playlist.name}”.`);
+            else if (added > 0) toasts.info(`Added ${added} of ${missing.length} songs to “${playlist.name}”.`);
+            else toasts.error(`Couldn't add songs to “${playlist.name}”.`);
+            return added;
+        } finally {
+            toasts.dismiss(toast);
+        }
+    }
+
     async createPlaylist(name: string): Promise<Playlist | null> {
         try {
             const playlist = await client.musicPlaylistCreate(name);

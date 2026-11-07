@@ -194,3 +194,103 @@ export function lyricsfileToLrc(yaml: string): string | null {
         .filter((line): line is string => line !== null);
     return lines.length >= 2 ? lines.join('\n') : null;
 }
+
+/** Lowercase letters/digits only, without "(feat. …)", "[Remix]" and the like. */
+export function comparableText(s: string): string {
+    return s
+        .toLowerCase()
+        .replace(/\(.*?\)|\[.*?\]/g, '')
+        .replace(/[^\p{L}\p{N}]+/gu, '');
+}
+
+export interface LrclibRecord {
+    id: number;
+    trackName: string;
+    artistName: string;
+    duration: number;
+    instrumental: boolean;
+    hasWordSync?: boolean;
+    plainLyrics: string | null;
+    syncedLyrics: string | null;
+    lyricsfile?: string | null;
+}
+
+export interface LrclibLyrics {
+    wordSynced?: string;
+    synced?: string;
+    plain?: string;
+}
+
+/** Do a record's title, artist and duration describe this track? */
+export function isLrclibMatch(
+    record: LrclibRecord,
+    track: { title: string; artists: { name: string }[]; duration: number },
+): boolean {
+    const title = comparableText(track.title);
+    const theirTitle = comparableText(String(record.trackName ?? ''));
+    if (!title || !theirTitle || (!theirTitle.includes(title) && !title.includes(theirTitle))) return false;
+
+    const artists = track.artists.map((a) => comparableText(a.name)).filter(Boolean);
+    const theirs = comparableText(String(record.artistName ?? ''));
+    if (artists.length && !artists.some((a) => theirs.includes(a) || a.includes(theirs))) return false;
+
+    if (track.duration && record.duration && Math.abs(record.duration - track.duration) > 5) return false;
+    return true;
+}
+
+/**
+ * Query lrclib for a track, preferring word-synced lyrics over line-synced over
+ * plain. Shared by both the desktop backend and Android.
+ */
+export async function fetchLrclib(
+    track: { title: string; artists: { name: string }[]; duration: number },
+    headers?: Record<string, string>,
+): Promise<LrclibLyrics | null> {
+    const enc = encodeURIComponent;
+    const artist = track.artists[0]?.name ?? '';
+    const duration = track.duration ? `&duration=${Math.round(track.duration)}` : '';
+    const records: LrclibRecord[] = [];
+    const add = (record: LrclibRecord) => {
+        if (isLrclibMatch(record, track) && !records.some((r) => r.id === record.id)) records.push(record);
+    };
+
+    const req = async (path: string): Promise<unknown> => {
+        try {
+            const res = await fetch(`https://lrclib.net/api/${path}`, {
+                ...(headers ? { headers } : {}),
+                signal: AbortSignal.timeout(8000),
+            });
+            if (!res.ok) return null;
+            return await res.json();
+        } catch {
+            return null;
+        }
+    };
+
+    if (artist) {
+        const exact = (await req(`get?artist_name=${enc(artist)}&track_name=${enc(track.title)}${duration}`)) as LrclibRecord | null;
+        if (exact) add(exact);
+    }
+
+    if (!records.length) {
+        const byTitle = (await req(`search?track_name=${enc(track.title)}`)) as LrclibRecord[] | null;
+        for (const record of Array.isArray(byTitle) ? byTitle : []) add(record);
+        const byArtist = artist ? ((await req(`search?q=${enc(artist.toLowerCase())}`)) as LrclibRecord[] | null) : null;
+        for (const record of Array.isArray(byArtist) ? byArtist : []) add(record);
+    }
+
+    if (!records.length) return null;
+
+    const quality = (r: LrclibRecord) =>
+        (r.hasWordSync && r.lyricsfile ? 4 : 0) + (r.syncedLyrics ? 2 : 0) + (r.plainLyrics ? 1 : 0);
+    const distance = (r: LrclibRecord) => Math.abs((r.duration || track.duration) - track.duration);
+    records.sort((a, b) => quality(b) - quality(a) || distance(a) - distance(b));
+    const best = records[0];
+
+    const wordSynced = best.hasWordSync && best.lyricsfile ? lyricsfileToLrc(best.lyricsfile) : null;
+    const lyrics: LrclibLyrics = {};
+    if (wordSynced) lyrics.wordSynced = wordSynced;
+    if (best.syncedLyrics) lyrics.synced = best.syncedLyrics;
+    if (best.plainLyrics) lyrics.plain = best.plainLyrics;
+    return lyrics;
+}

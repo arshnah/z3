@@ -38,20 +38,60 @@ export interface Thumbnail {
 }
 
 export interface Artist {
+    id?: string;
     thumbnails: Thumbnail[];
     name: string;
     followers?: number;
+    subtitle?: string;
 }
 
 export interface AlbumBase {
+    id?: string;
     thumbnails: Thumbnail[];
     title: string;
     artists: Artist[];
     year?: string;
+    subtitle?: string;
 }
 
 export interface Album {
     songs: Song[];
+}
+
+export type CollectionKind = "album" | "single" | "playlist";
+
+export interface CollectionSummary {
+    id: string;
+    kind: CollectionKind;
+    title: string;
+    subtitle?: string;
+    year?: string;
+    thumbnails: Thumbnail[];
+    artists: Artist[];
+}
+
+export interface CollectionDetails extends CollectionSummary {
+    description?: string;
+    tracks: Song[];
+}
+
+export interface ArtistDetails {
+    id: string;
+    name: string;
+    subtitle?: string;
+    description?: string;
+    thumbnails: Thumbnail[];
+    topSongs: Song[];
+    albums: CollectionSummary[];
+    singles: CollectionSummary[];
+    playlists: CollectionSummary[];
+    similarArtists: Artist[];
+    hasMoreSongs?: boolean;
+}
+
+export interface SearchExtras {
+    artists: Artist[];
+    albums: CollectionSummary[];
 }
 
 export interface Playlist {

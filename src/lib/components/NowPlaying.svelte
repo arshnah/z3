@@ -4,6 +4,7 @@
     import Slider from "$lib/components/Slider.svelte";
     import LyricsView from "$lib/components/LyricsView.svelte";
     import ShaderCanvas from "$lib/components/ShaderCanvas.svelte";
+    import ArtistLinks from "$lib/components/ArtistLinks.svelte";
     import {
         playerState,
         togglePlay,
@@ -209,7 +210,14 @@
             <div class="meta-text">
                 {#key track.id}
                     <h1 class="ellipsis" title={track.title} in:fly={{ y: 10, duration: 500 }}>{track.title}</h1>
-                    <p class="ellipsis" in:fly={{ y: 10, duration: 500, delay: 60 }}>{artistNames(track)}</p>
+                    <p class="ellipsis" in:fly={{ y: 10, duration: 500, delay: 60 }}>
+                        <ArtistLinks
+                            artists={track.artists}
+                            album={track.album}
+                            showAlbum={mode === "lyrics"}
+                            providerHint={track.id.startsWith("js:") ? "js" : "yt"}
+                        />
+                    </p>
                 {/key}
             </div>
             <button class="icon-btn fav" class:is-fav={fav} title="Favourite" onclick={() => libraryState.toggleFavourite(track)}>

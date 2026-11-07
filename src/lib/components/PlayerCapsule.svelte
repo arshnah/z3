@@ -8,6 +8,7 @@
     import Cover from "$lib/components/Cover.svelte";
     import Slider from "$lib/components/Slider.svelte";
     import LyricText from "$lib/components/LyricText.svelte";
+    import ArtistLinks from "$lib/components/ArtistLinks.svelte";
     import { lyricsState } from "$lib/state/lyrics.svelte";
     import {
         playerState,
@@ -125,14 +126,21 @@
                 {/if}
             </button>
 
-            <button class="info" onclick={() => ui.openNowPlaying()}>
+            <!-- svelte-ignore a11y_click_events_have_key_events -->
+            <div
+                class="info"
+                role="button"
+                tabindex="0"
+                onclick={(e) => !(e.target as HTMLElement).closest("a") && ui.openNowPlaying()}
+                onkeydown={(e) => e.key === "Enter" && ui.openNowPlaying()}
+            >
                 {#key track.id}
                     <span class="title ellipsis" title={track.title}>{track.title}</span>
                     {#if !expanded && lyricsState.synced && !playerState.paused}
                         <span class="ticker"><LyricText /></span>
                     {:else}
                     <span class="artist ellipsis">
-                        {artistNames(track)}
+                        <ArtistLinks artists={track.artists} providerHint={track.id.startsWith("js:") ? "js" : "yt"} />
                         {#if expanded && playerState.currentPlaylist}
                             <span class="ctx">
                                 · <Icon name={isRadioContext() ? "radio" : "list-music"} /> {playerState.currentPlaylist.name}
@@ -141,7 +149,7 @@
                     </span>
                     {/if}
                 {/key}
-            </button>
+            </div>
 
             <button class="icon-btn fav" class:is-fav={fav} title="Favourite" onclick={() => libraryState.toggleFavourite(track)}>
                 <Icon name="heart" />

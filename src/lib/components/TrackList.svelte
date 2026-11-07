@@ -2,6 +2,7 @@
     import Icon from "$lib/components/Icon.svelte";
     import Cover from "$lib/components/Cover.svelte";
     import EqBars from "$lib/components/EqBars.svelte";
+    import ArtistLinks from "$lib/components/ArtistLinks.svelte";
     import type { Playlist, Song } from "$lib/schema";
     import { libraryState } from "$lib/state/library.svelte";
     import { playerState, togglePlay } from "$lib/state/player.svelte";
@@ -112,8 +113,8 @@
             draggable={reorderable}
             ondblclick={() => play(i, track)}
             onclick={(e) => {
-                // Single click plays too, unless it landed on a control.
-                if (!(e.target as HTMLElement).closest("button")) play(i, track);
+                // Single click plays too, unless it landed on a control or link.
+                if (!(e.target as HTMLElement).closest("button, a")) play(i, track);
             }}
             oncontextmenu={(e) => ui.openMenu(e, trackMenu(track, { playlist }))}
             ondragstart={(e) => {
@@ -149,7 +150,12 @@
                     <span class="title ellipsis" title={track.title}>{track.title}</span>
                     <span class="artist ellipsis">
                         {#if track.isDownloaded}<span class="dl" title="Downloaded"><Icon name="circle-arrow-down" /></span>{/if}
-                        {artistNames(track)}{#if showAlbum && track.album?.title}<span class="alb">{" · "}{track.album.title}</span>{/if}
+                        <ArtistLinks
+                            artists={track.artists}
+                            album={track.album}
+                            {showAlbum}
+                            providerHint={track.id.startsWith("js:") ? "js" : "yt"}
+                        />
                     </span>
                 </span>
             </span>
@@ -292,9 +298,6 @@
     }
     .title-cell :global(.cover) {
         border-radius: 12px !important;
-    }
-    .alb {
-        color: var(--text-3);
     }
     .title-text {
         display: flex;

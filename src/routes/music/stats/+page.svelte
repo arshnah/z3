@@ -1,8 +1,10 @@
 <script lang="ts">
     import Icon from "$lib/components/Icon.svelte";
     import Cover from "$lib/components/Cover.svelte";
+    import ArtistLinks from "$lib/components/ArtistLinks.svelte";
     import { statsState } from "$lib/state/stats.svelte";
     import { playTrack } from "$lib/state/player.svelte";
+    import { openArtist } from "$lib/actions";
     import { formatDate, formatLongDuration } from "$lib/utils";
     import type { Song } from "$lib/schema";
 
@@ -63,18 +65,28 @@
                     <ol class="ranks">
                         {#each s.topSongs.slice(0, 15) as song, i (song.id)}
                             <li>
-                                <button class="rank-row" onclick={() => play(song)}>
+                                <!-- svelte-ignore a11y_click_events_have_key_events -->
+                                <div
+                                    class="rank-row clickable"
+                                    role="button"
+                                    tabindex="0"
+                                    onclick={(e) => !(e.target as HTMLElement).closest("a") && play(song)}
+                                    onkeydown={(e) => e.key === "Enter" && play(song)}
+                                >
                                     <span class="pos" class:podium={i < 3}>{i + 1}</span>
                                     <Cover src={song.thumbnailUrl} title={song.title} size={42} radius="var(--r-xs)" />
                                     <span class="info">
                                         <span class="t ellipsis">{song.title}</span>
+                                        <span class="subtle ellipsis a">
+                                            <ArtistLinks artists={song.artists.map((name) => ({ name }))} providerHint={song.id.startsWith("js:") ? "js" : "yt"} />
+                                        </span>
                                         <span class="bar"><i style:width="{(song.playTimeMs / maxSong) * 100}%" style:animation-delay="{i * 40}ms"></i></span>
                                     </span>
                                     <span class="meta">
                                         <span>{formatLongDuration(song.playTimeMs / 1000)}</span>
                                         <small>{song.plays} play{song.plays === 1 ? "" : "s"}</small>
                                     </span>
-                                </button>
+                                </div>
                             </li>
                         {/each}
                     </ol>
@@ -84,17 +96,19 @@
                     <h2 class="section-title">Top artists</h2>
                     <ol class="ranks">
                         {#each s.topArtists.slice(0, 15) as artist, i (artist.name)}
-                            <li class="rank-row static">
-                                <span class="pos" class:podium={i < 3}>{i + 1}</span>
-                                <Cover src={artist.thumbnailUrl} title={artist.name} size={42} radius="50%" />
-                                <span class="info">
-                                    <span class="t ellipsis">{artist.name}</span>
-                                    <span class="bar"><i style:width="{(artist.playTimeMs / maxArtist) * 100}%" style:animation-delay="{i * 40}ms"></i></span>
-                                </span>
-                                <span class="meta">
-                                    <span>{formatLongDuration(artist.playTimeMs / 1000)}</span>
-                                    <small>{artist.plays} play{artist.plays === 1 ? "" : "s"}</small>
-                                </span>
+                            <li>
+                                <button class="rank-row" onclick={() => openArtist({ name: artist.name })}>
+                                    <span class="pos" class:podium={i < 3}>{i + 1}</span>
+                                    <Cover src={artist.thumbnailUrl} title={artist.name} size={42} radius="50%" />
+                                    <span class="info">
+                                        <span class="t ellipsis">{artist.name}</span>
+                                        <span class="bar"><i style:width="{(artist.playTimeMs / maxArtist) * 100}%" style:animation-delay="{i * 40}ms"></i></span>
+                                    </span>
+                                    <span class="meta">
+                                        <span>{formatLongDuration(artist.playTimeMs / 1000)}</span>
+                                        <small>{artist.plays} play{artist.plays === 1 ? "" : "s"}</small>
+                                    </span>
+                                </button>
                             </li>
                         {/each}
                     </ol>
@@ -104,16 +118,25 @@
                     <h2 class="section-title">Recently played</h2>
                     <div class="history">
                         {#each s.history as ev, i (ev.timestamp + ev.id + i)}
-                            <button class="rank-row" onclick={() => play(ev)}>
+                            <!-- svelte-ignore a11y_click_events_have_key_events -->
+                            <div
+                                class="rank-row clickable"
+                                role="button"
+                                tabindex="0"
+                                onclick={(e) => !(e.target as HTMLElement).closest("a") && play(ev)}
+                                onkeydown={(e) => e.key === "Enter" && play(ev)}
+                            >
                                 <Cover src={ev.thumbnailUrl} title={ev.title} size={40} radius="var(--r-xs)" />
                                 <span class="info">
                                     <span class="t ellipsis">{ev.title}</span>
-                                    <span class="subtle ellipsis a">{ev.artists.join(", ")}</span>
+                                    <span class="subtle ellipsis a">
+                                        <ArtistLinks artists={ev.artists.map((name) => ({ name }))} providerHint={ev.id.startsWith("js:") ? "js" : "yt"} />
+                                    </span>
                                 </span>
                                 <span class="meta">
                                     <small>{formatDate(ev.timestamp)}</small>
                                 </span>
-                            </button>
+                            </div>
                         {/each}
                     </div>
                 </section>
@@ -214,7 +237,11 @@
         text-align: left;
         transition: background 0.18s;
     }
-    button.rank-row:hover {
+    .rank-row.clickable {
+        cursor: pointer;
+    }
+    button.rank-row:hover,
+    .rank-row.clickable:hover {
         background: var(--surface-2);
     }
     .pos {

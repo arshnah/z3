@@ -7,7 +7,17 @@ import { promisify } from 'node:util';
 
 const execFileAsync = promisify(execFile);
 
-import type { Playlist, Song, Stream, Library, Thumbnail, MusicProvider } from '../../src/lib/schema';
+import type {
+    Playlist,
+    Song,
+    Stream,
+    Library,
+    Thumbnail,
+    MusicProvider,
+    ArtistDetails,
+    CollectionDetails,
+    SearchExtras,
+} from '../../src/lib/schema';
 import { updateThumbnailUrl } from '../../src/lib/utils';
 import { COVER_SCHEME, coverUrl } from '../../src/lib/covers';
 
@@ -19,7 +29,15 @@ import { buildMuzzaBackup, parseMuzzaBackup, readMuzzaEventsFromDb, type MuzzaEv
 import { StatsStore } from '../lib/stats';
 import { lyricsfileToLrc } from '../lib/lyricsfile';
 import { routes as scrobbling } from '../lib/scrobbling';
-import { musicText, youtubeArtistNames } from '../../src/lib/music-metadata';
+import { musicText, youtubeArtistNames, youtubeArtists } from '../../src/lib/music-metadata';
+import {
+    fetchArtistAllSongs,
+    fetchArtistDetails,
+    fetchCollectionDetails,
+    saavnToSong,
+    searchMusicExtras,
+    ytToSong,
+} from '../../src/lib/music-catalog';
 
 const DEBUG = !!process.env.ZETA_DEBUG;
 function log(...args: any[]) {
@@ -933,26 +951,6 @@ async function fetchSyncedLyricsPython(query: string): Promise<string | null> {
     }
 }
 
-/** Map a JioSaavn SDK song to Zeta's {@link Song}. */
-function saavnToSong(s: any, downloaded: Set<string>): Song {
-    const id = `js:${s.id}`;
-    const images = (list: any[] | undefined) =>
-        (list ?? []).map((i) => ({
-            url: i.url,
-            width: parseInt(i.resolution.split('x')[0]),
-            height: parseInt(i.resolution.split('x')[1]),
-        }));
-    return {
-        id,
-        title: musicText(s.title || 'Untitled Song'),
-        thumbnails: images(s.images),
-        artists: s.artists?.all ? s.artists.all.slice(0, 3).map((a: any) => ({ name: musicText(a.name), thumbnails: images(a.images) })) : [],
-        album: s.album ? { title: musicText(s.album.title || 'Untitled Album'), artists: [], thumbnails: [] } : null,
-        duration: s.duration || 0,
-        isDownloaded: downloaded.has(id),
-    };
-}
-
 /* -------------------------------------------------------------------------- */
 /*                                   routes                                   */
 /* -------------------------------------------------------------------------- */
@@ -1011,18 +1009,9 @@ export const routes = {
                 await init();
                 const res = await yt.music.search(query, { type: 'song' });
 
-                return (res.songs?.contents || []).map((song) => {
-                    const id = `yt:${song.id}`;
-                    return {
-                        id,
-                        title: song.title || 'Untitled',
-                        thumbnails: song.thumbnails.map((t) => ({ url: t.url, width: t.width, height: t.height })),
-                        artists: youtubeArtistNames(song).map((name) => ({ name, thumbnails: [] })),
-                        album: song.album ? { title: song.album.name, artists: [], thumbnails: [] } : null,
-                        duration: song.duration?.seconds || 0,
-                        isDownloaded: downloaded.has(id),
-                    };
-                });
+                return (res.songs?.contents || [])
+                    .map((song) => ytToSong(song, downloaded))
+                    .filter((s): s is Song => s !== null);
             }
 
             case 'js': {
@@ -1033,6 +1022,28 @@ export const routes = {
         }
 
         throw new Error(`Provider '${provider}' not supported for searching.`);
+    },
+
+    async musicSearchExtras(query: string, provider: MusicProvider): Promise<SearchExtras> {
+        return searchMusicExtras(async () => (await init(), yt.music), query, provider);
+    },
+
+    async musicArtist(idOrQuery: string, nameHint?: string): Promise<ArtistDetails> {
+        await ensureStorage();
+        const downloaded = new Set((await metadata.all()).filter((r) => r.file).map((r) => r.id));
+        return fetchArtistDetails(async () => (await init(), yt.music), downloaded, idOrQuery, nameHint);
+    },
+
+    async musicArtistSongs(artistId: string, nameHint?: string): Promise<Song[]> {
+        await ensureStorage();
+        const downloaded = new Set((await metadata.all()).filter((r) => r.file).map((r) => r.id));
+        return fetchArtistAllSongs(async () => (await init(), yt.music), downloaded, artistId, nameHint);
+    },
+
+    async musicCollection(id: string): Promise<CollectionDetails> {
+        await ensureStorage();
+        const downloaded = new Set((await metadata.all()).filter((r) => r.file).map((r) => r.id));
+        return fetchCollectionDetails(async () => (await init(), yt.music), downloaded, id);
     },
 
     /**

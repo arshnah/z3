@@ -120,3 +120,5 @@ export function rememberSong(library: MobileLibrary, stored: StoredSong): Song {
     }
     return stored.song;
 }
+
+export const androidStorage = new AndroidStorage();

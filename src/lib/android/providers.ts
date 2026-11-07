@@ -1,8 +1,16 @@
 import { CapacitorHttp } from '@capacitor/core';
 import { Song as Saavn } from '@saavn-labs/sdk';
 import { Innertube, Parser, Platform } from 'youtubei.js/web';
-import type { MusicProvider, Song } from '../schema';
-import { musicText, youtubeArtistNames } from '../music-metadata';
+import type { ArtistDetails, CollectionDetails, MusicProvider, SearchExtras, Song } from '../schema';
+import {
+    fetchArtistAllSongs,
+    fetchArtistDetails,
+    fetchCollectionDetails,
+    saavnToSong,
+    searchMusicExtras,
+    ytToSong,
+} from '../music-catalog';
+import { fetchLrclib } from '../../../electron/lib/lyricsfile';
 
 // Use the native HTTP API explicitly for YouTube: Request/Headers in a WebView
 // otherwise discard the Origin/User-Agent headers the service expects.
@@ -40,29 +48,30 @@ function yt() {
     });
 }
 
-function saavnSong(s: Awaited<ReturnType<typeof Saavn.search>>['results'][number]): Song {
-    const images = (list: { url: string; resolution: string }[] = []) => list.map((image) => ({
-        url: image.url, width: parseInt(image.resolution), height: parseInt(image.resolution),
-    }));
-    return {
-        id: `js:${s.id}`, title: musicText(s.title || 'Untitled'), thumbnails: images(s.images),
-        artists: (s.artists?.all ?? []).slice(0, 3).map((a) => ({ name: musicText(a.name), thumbnails: images(a.images) })),
-        album: s.album ? { title: musicText(s.album.title || 'Untitled Album'), thumbnails: [], artists: [] } : null,
-        duration: s.duration || 0, isDownloaded: false,
-    };
-}
-
 export async function search(query: string, provider: MusicProvider): Promise<Song[]> {
-    if (provider === 'js') return (await Saavn.search({ query, limit: 30 })).results.map(saavnSong);
+    const empty = new Set<string>();
+    if (provider === 'js') return (await Saavn.search({ query, limit: 30 })).results.map((s) => saavnToSong(s, empty));
     if (provider !== 'yt') throw new Error('Choose YouTube Music or JioSaavn to search.');
     const results = await (await yt()).music.search(query, { type: 'song' });
-    return (results.songs?.contents ?? []).map((s) => ({
-        id: `yt:${s.id}`, title: s.title || 'Untitled',
-        thumbnails: s.thumbnails.map((t) => ({ url: t.url, width: t.width, height: t.height })),
-        artists: youtubeArtistNames(s).map((name) => ({ name, thumbnails: [] })),
-        album: s.album ? { title: s.album.name, artists: [], thumbnails: [] } : null,
-        duration: s.duration?.seconds || 0, isDownloaded: false,
-    }));
+    return (results.songs?.contents ?? [])
+        .map((s) => ytToSong(s, empty))
+        .filter((s): s is Song => s !== null);
+}
+
+export async function searchExtras(query: string, provider: MusicProvider): Promise<SearchExtras> {
+    return searchMusicExtras(async () => (await yt()).music, query, provider);
+}
+
+export async function artist(idOrQuery: string, nameHint?: string, downloaded = new Set<string>()): Promise<ArtistDetails> {
+    return fetchArtistDetails(async () => (await yt()).music, downloaded, idOrQuery, nameHint);
+}
+
+export async function artistSongs(artistId: string, nameHint?: string, downloaded = new Set<string>()): Promise<Song[]> {
+    return fetchArtistAllSongs(async () => (await yt()).music, downloaded, artistId, nameHint);
+}
+
+export async function collection(id: string, downloaded = new Set<string>()): Promise<CollectionDetails> {
+    return fetchCollectionDetails(async () => (await yt()).music, downloaded, id);
 }
 
 export async function suggestions(query: string): Promise<string[]> {
@@ -96,11 +105,8 @@ export async function resolveAudio(id: string): Promise<{ url: string; mimetype:
 }
 
 export async function lyrics(track: Song): Promise<string | null> {
-    if (track.lyrics) return track.lyrics;
-    const query = new URLSearchParams({ track_name: track.title, artist_name: track.artists[0]?.name ?? '' });
-    if (track.duration) query.set('duration', String(Math.round(track.duration)));
-    const response = await fetch(`https://lrclib.net/api/get?${query}`);
-    if (!response.ok) return null;
-    const data = await response.json();
-    return data.syncedLyrics || data.plainLyrics || null;
+    const lrc = await fetchLrclib(track);
+    if (lrc?.wordSynced) return lrc.wordSynced;
+    if (lrc?.synced) return lrc.synced;
+    return lrc?.plain ?? track.lyrics ?? null;
 }

@@ -88,8 +88,10 @@
     let clockBase = 0;
     let clockAt = 0;
     $effect(() => {
+        void lines;
         clockBase = playerState.currentTime;
         clockAt = performance.now();
+        lastGlow = -1;
     });
 
     let lastGlow = -1;
