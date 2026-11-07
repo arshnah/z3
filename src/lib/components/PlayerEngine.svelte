@@ -39,8 +39,28 @@
     import { updateThumbnailUrl, getThumbnailUrl, artistNames } from "$lib/utils";
     import { isCoverUrl } from "$lib/covers";
     import type { Song } from "$lib/schema";
+    import { isAndroid } from '$lib/platform';
+    import AndroidPlayer from './AndroidPlayer.svelte';
+    import { androidPreferences } from '$lib/state/android.svelte';
+    import { ScrobbleTracker } from '$lib/scrobbling/tracker';
 
     let audio = $state<HTMLAudioElement>();
+    const scrobbler = new ScrobbleTracker(
+        (track) => { void client.scrobbleNowPlaying(track).catch(() => {}); },
+        (track, startedAt, listened) => { void client.scrobbleSubmit(track, startedAt, listened).catch(() => {}); },
+    );
+    let scrobbleTrackId: string | undefined;
+    $effect(() => {
+        const id = playerState.currentTrack?.id;
+        if (id !== scrobbleTrackId) { scrobbler.finish(); scrobbleTrackId = id; }
+    });
+    $effect(() => {
+        const retry = () => void client.scrobbleRetry().catch(() => {});
+        retry();
+        const timer = setInterval(retry, 60_000);
+        window.addEventListener('online', retry);
+        return () => { clearInterval(timer); window.removeEventListener('online', retry); scrobbler.finish(); };
+    });
 
     /* ---------------------------- audio source ---------------------------- */
 
@@ -51,6 +71,10 @@
         const stream = playerState.stream;
         if (!stream) {
             src = null;
+            return;
+        }
+        if (stream.url) {
+            src = stream.url;
             return;
         }
         const url = URL.createObjectURL(new Blob([new Uint8Array(stream.data)], { type: stream.mimetype }));
@@ -72,12 +96,14 @@
     const SESSION_KEY = "zeta:session";
     // Set while restoring: load the last track paused, at its old position.
     let restoreAt = $state<number | null>(null);
+    let restoringId: string | null = null;
 
     (function restoreSession() {
         try {
             const saved = JSON.parse(localStorage.getItem(SESSION_KEY) || "null");
             if (!saved?.track) return;
             restoreAt = saved.time ?? 0;
+            restoringId = saved.track.id;
             playerState.currentTrack = saved.track;
             if (saved.playlistId) {
                 // The library loads asynchronously; attach the context once it has.
@@ -154,6 +180,10 @@
 
     $effect(() => {
         const track = playerState.currentTrack;
+        if (restoreAt !== null && restoringId && track?.id !== restoringId) {
+            restoreAt = null;
+            restoringId = null;
+        }
         untrack(() => artworkState.update(track));
 
         if (!track) {
@@ -240,8 +270,12 @@
     }
 
     function accumulatePlaytime() {
-        if (!audio) return;
-        const t = audio.currentTime;
+        const t = playerState.currentTime;
+        const song = playerState.currentTrack;
+        if (song && !playerState.isLoading && playerState.stream) scrobbler.tick({
+            id: song.id, title: song.title, artists: song.artists.map((artist) => artist.name),
+            album: song.album?.title, duration: playerState.duration || song.duration,
+        }, t, playerState.paused);
         const dt = t - lastTime;
         if (dt > 0 && dt < 2 && !playerState.paused) playedMs += dt * 1000;
         lastTime = t;
@@ -370,7 +404,7 @@
 
     $effect(() => {
         const track = playerState.currentTrack;
-        if (!track || !("mediaSession" in navigator)) return;
+        if (isAndroid || !track || !("mediaSession" in navigator)) return;
         navigator.mediaSession.metadata = new MediaMetadata({
             title: track.title,
             artist: artistNames(track),
@@ -380,12 +414,12 @@
     });
 
     $effect(() => {
-        if (!("mediaSession" in navigator)) return;
+        if (isAndroid || !("mediaSession" in navigator)) return;
         navigator.mediaSession.playbackState = playerState.currentTrack ? (playerState.paused ? "paused" : "playing") : "none";
     });
 
     $effect(() => {
-        if (!("mediaSession" in navigator)) return;
+        if (isAndroid || !("mediaSession" in navigator)) return;
         navigator.mediaSession.setActionHandler("play", () => (playerState.paused = false));
         navigator.mediaSession.setActionHandler("pause", () => (playerState.paused = true));
         navigator.mediaSession.setActionHandler("seekto", (d) => {
@@ -396,7 +430,7 @@
     });
 
     function updatePositionState() {
-        if (!playerState.currentTrack || !("mediaSession" in navigator) || !playerState.duration) return;
+        if (isAndroid || !playerState.currentTrack || !("mediaSession" in navigator) || !playerState.duration) return;
         try {
             navigator.mediaSession.setPositionState({
                 duration: playerState.duration,
@@ -453,7 +487,6 @@
                     largeImageUrl: art,
                     largeImageKey: art,
                     smallImageText: "Zeta Music",
-                    smallImageUrl: "zeta",
                     smallImageKey: "zeta",
                 });
             })
@@ -481,6 +514,7 @@
     });
 
     function onEnded() {
+        scrobbler.finish();
         flushListen();
         if (ui.sleepAt === "track") {
             ui.sleepAt = null;
@@ -546,6 +580,23 @@
 
 <svelte:window onkeydown={onKey} onbeforeunload={() => { flushListen(); saveSession(); }} />
 
+{#if isAndroid}
+<AndroidPlayer
+    uri={playerState.stream?.nativeUri}
+    track={playerState.currentTrack}
+    bind:paused={playerState.paused}
+    bind:currentTime={playerState.currentTime}
+    bind:duration={playerState.duration}
+    bind:restoreAt
+    volume={playerState.muted ? 0 : playerState.volume}
+    keepAwake={androidPreferences.keepAwake}
+    onended={onEnded}
+    ontimeupdate={accumulatePlaytime}
+    onerror={(error) => {
+        if (playerState.stream && playerState.currentTrack) handlePlaybackFailure(playerState.currentTrack, error);
+    }}
+/>
+{:else}
 <audio
     bind:this={audio}
     bind:paused={playerState.paused}
@@ -576,3 +627,4 @@
             handlePlaybackFailure(playerState.currentTrack, new Error("This track could not be played."));
     }}
 ></audio>
+{/if}

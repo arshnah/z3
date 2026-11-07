@@ -4,61 +4,74 @@ on:
   push:
     tags:
       - 'v*'
-  # Lets you re-run the pipeline for an existing tag (e.g. to re-upload assets
-  # after a failed publish) without having to delete and re-push the tag.
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Existing tag to build and publish (e.g. v0.2.0)'
+        description: 'Existing tag to build and publish (e.g. v0.4.1)'
         required: true
 
 env:
   RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
 
-# Never let two runs for the same tag publish at once.
 concurrency:
   group: release-${{ github.event.inputs.tag || github.ref_name }}
   cancel-in-progress: false
 
 jobs:
-  # Create the GitHub release ONCE, up front, and guarantee it is a DRAFT.
-  #
-  # Two things depend on this:
-  #  1. Pre-creating it stops the three matrix jobs below from racing to create
-  #     it (the loser used to die with 422 already_exists on tag_name).
-  #  2. It MUST be a draft. electron-builder refuses to upload to an already
-  #     published release when `releaseType` is "draft": it logs
-  #     "GitHub release not created / existing type not compatible" and then
-  #     *silently skips* every upload while still exiting 0 — which is how
-  #     v0.2.0 ended up published with zero assets.
+  validate:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+      - name: Verify release version and credentials
+        env:
+          VITE_LASTFM_API_KEY: ${{ secrets.LASTFM_API_KEY }}
+          VITE_LASTFM_API_SECRET: ${{ secrets.LASTFM_API_SECRET }}
+        run: |
+          node --input-type=module <<'JS'
+          import { readFileSync } from 'node:fs';
+          const { version } = JSON.parse(readFileSync('package.json', 'utf8'));
+          if (process.env.RELEASE_TAG !== `v${version}`) throw new Error('Tag and package version must match.');
+          const gradle = readFileSync('android/app/build.gradle', 'utf8');
+          if (!gradle.includes(`versionName "${version}"`)) throw new Error('Android version must match the release.');
+          if (!process.env.VITE_LASTFM_API_KEY || !process.env.VITE_LASTFM_API_SECRET) throw new Error('Last.fm build credentials are missing from repository secrets.');
+          JS
+      - run: npm ci
+      - run: npm run check
+      - run: npm run test:android
+      - run: npm run test:scrobbling
+
+  # All publishers upload into one draft; users only see the complete release.
   prepare-release:
+    needs: validate
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
-      - name: Check out repository
-        uses: actions/checkout@v5
+      - uses: actions/checkout@v5
         with:
           ref: ${{ env.RELEASE_TAG }}
-
-      - name: Ensure a draft release exists for the tag
+      - name: Ensure a draft release exists
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
           if gh release view "$RELEASE_TAG" > /dev/null 2>&1; then
-            if [ "$(gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft)" = "true" ]; then
-              echo "Draft release $RELEASE_TAG already exists - reusing it."
-            else
-              echo "Release $RELEASE_TAG is already published; reverting it to a draft so assets can be uploaded."
+            if [ "$(gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft)" != "true" ]; then
               gh release edit "$RELEASE_TAG" --draft=true
             fi
           else
-            gh release create "$RELEASE_TAG" \
-              --draft \
-              --verify-tag \
-              --title "$RELEASE_TAG" \
-              --generate-notes
+            gh release create "$RELEASE_TAG" --draft --verify-tag --title "$RELEASE_TAG" --generate-notes
+          fi
+          if [ -f "releases/$RELEASE_TAG.md" ]; then
+            gh release edit "$RELEASE_TAG" --notes-file "releases/$RELEASE_TAG.md"
           fi
 
   build:
@@ -67,66 +80,107 @@ jobs:
     permissions:
       contents: write
     strategy:
-      # One platform failing shouldn't cancel the others; the release stays a
-      # draft so a partial upload is never shown to users.
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
-
     steps:
-      - name: Check out repository
-        uses: actions/checkout@v5
+      - uses: actions/checkout@v5
         with:
           ref: ${{ env.RELEASE_TAG }}
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v5
+      - uses: actions/setup-node@v5
         with:
-          node-version: 22
-          cache: 'npm'
-
+          node-version: 24
+          cache: npm
       - name: Install system dependencies (Linux)
         if: matrix.os == 'ubuntu-latest'
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends libarchive-tools fakeroot dpkg-dev dpkg
-
-      - name: Install node dependencies
-        run: npm ci
-
+      - run: npm ci
       - name: Compile SvelteKit and Electron
+        env:
+          VITE_LASTFM_API_KEY: ${{ secrets.LASTFM_API_KEY }}
+          VITE_LASTFM_API_SECRET: ${{ secrets.LASTFM_API_SECRET }}
         run: npm run build
-
-      - name: Build and publish with electron-builder
+      - name: Build and upload desktop packages
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: npx electron-builder --publish=always
 
-  # Flip the draft into a real release only after every platform has uploaded,
-  # so electron-updater clients never see a half-finished release.
-  publish-release:
-    needs: build
+  build-android:
+    needs: prepare-release
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
-      - name: Check out repository
-        uses: actions/checkout@v5
+      - uses: actions/checkout@v5
         with:
           ref: ${{ env.RELEASE_TAG }}
-
-      - name: Publish the release
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 21
+      - uses: android-actions/setup-android@v3
+      - name: Install Android SDK
+        run: sdkmanager 'platforms;android-36' 'build-tools;36.0.0'
+      - run: npm ci
+      - name: Build and sync Android web assets
+        env:
+          VITE_LASTFM_API_KEY: ${{ secrets.LASTFM_API_KEY }}
+          VITE_LASTFM_API_SECRET: ${{ secrets.LASTFM_API_SECRET }}
+        run: npm run android:sync
+      - name: Restore Android signing key
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          set -euo pipefail
+          test -n "$ANDROID_KEYSTORE_BASE64"
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/zeta-release.keystore"
+          chmod 600 "$RUNNER_TEMP/zeta-release.keystore"
+      - name: Build and lint signed APK
+        working-directory: android
+        env:
+          ANDROID_KEYSTORE_PATH: ${{ runner.temp }}/zeta-release.keystore
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: ./gradlew --no-daemon assembleRelease lintRelease
+      - name: Verify and upload Android APK
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          # Guard against electron-builder having silently skipped its uploads:
-          # never publish an empty release, fail loudly and leave it as a draft.
-          count=$(gh release view "$RELEASE_TAG" --json assets --jq '.assets | length')
-          echo "$RELEASE_TAG has $count asset(s)."
-          if [ "$count" -eq 0 ]; then
-            echo "::error::No assets were uploaded to $RELEASE_TAG - refusing to publish an empty release."
-            exit 1
-          fi
-          gh release edit "$RELEASE_TAG" --draft=false
+          "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify android/app/build/outputs/apk/release/app-release.apk
+          version="${RELEASE_TAG#v}"
+          apk="$RUNNER_TEMP/Zeta-$version-android.apk"
+          cp android/app/build/outputs/apk/release/app-release.apk "$apk"
+          gh release upload "$RELEASE_TAG" "$apk" --clobber
+      - name: Remove temporary signing key
+        if: always()
+        run: rm -f "$RUNNER_TEMP/zeta-release.keystore"
+
+  publish-release:
+    needs: [build, build-android]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+      - name: Verify every desktop asset and the Android APK, then publish
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          gh release view "$RELEASE_TAG" --json assets > "$RUNNER_TEMP/zeta-release-assets.json"
+          node scripts/verify-release.mjs "$RUNNER_TEMP/zeta-release-assets.json"
+          gh release edit "$RELEASE_TAG" --draft=false --latest

@@ -145,8 +145,10 @@
         opacity: 0.85;
     }
     @media (max-width: 800px) {
+        .launch { padding: 24px; min-height: 100dvh; }
         .tiles {
-            grid-template-columns: repeat(2, 160px);
+            width: min(100%, 336px);
+            grid-template-columns: repeat(2, minmax(0, 1fr));
         }
     }
 </style>

@@ -18,6 +18,8 @@ import { MetadataStore, embedMp4Tags, readAudioTags, type IndexRecord } from '..
 import { buildMuzzaBackup, parseMuzzaBackup, readMuzzaEventsFromDb, type MuzzaEvent } from '../lib/muzza';
 import { StatsStore } from '../lib/stats';
 import { lyricsfileToLrc } from '../lib/lyricsfile';
+import { routes as scrobbling } from '../lib/scrobbling';
+import { musicText, youtubeArtistNames } from '../../src/lib/music-metadata';
 
 const DEBUG = !!process.env.ZETA_DEBUG;
 function log(...args: any[]) {
@@ -942,10 +944,10 @@ function saavnToSong(s: any, downloaded: Set<string>): Song {
         }));
     return {
         id,
-        title: s.title || 'Untitled Song',
+        title: musicText(s.title || 'Untitled Song'),
         thumbnails: images(s.images),
-        artists: s.artists?.all ? s.artists.all.slice(0, 3).map((a: any) => ({ name: a.name, thumbnails: images(a.images) })) : [],
-        album: s.album ? { title: s.album.title || 'Untitled Album', artists: [], thumbnails: [] } : null,
+        artists: s.artists?.all ? s.artists.all.slice(0, 3).map((a: any) => ({ name: musicText(a.name), thumbnails: images(a.images) })) : [],
+        album: s.album ? { title: musicText(s.album.title || 'Untitled Album'), artists: [], thumbnails: [] } : null,
         duration: s.duration || 0,
         isDownloaded: downloaded.has(id),
     };
@@ -956,6 +958,7 @@ function saavnToSong(s: any, downloaded: Set<string>): Song {
 /* -------------------------------------------------------------------------- */
 
 export const routes = {
+    ...scrobbling,
     /**
      * Resolve lyrics for a track, preferring the most precise timing available.
      *
@@ -1014,7 +1017,7 @@ export const routes = {
                         id,
                         title: song.title || 'Untitled',
                         thumbnails: song.thumbnails.map((t) => ({ url: t.url, width: t.width, height: t.height })),
-                        artists: (song.artists || []).map((a) => ({ name: a.name, thumbnails: [] })),
+                        artists: youtubeArtistNames(song).map((name) => ({ name, thumbnails: [] })),
                         album: song.album ? { title: song.album.name, artists: [], thumbnails: [] } : null,
                         duration: song.duration?.seconds || 0,
                         isDownloaded: downloaded.has(id),
@@ -1042,7 +1045,7 @@ export const routes = {
      * local. Pure search results (no index record) stay off-disk — they only
      * live in the frontend cache until explicitly added to a playlist.
      */
-    async musicStream(id: string, encryptedJioSaavnUrl?: string, persist: boolean = true): Promise<Stream> {
+    async musicStream(id: string, encryptedJioSaavnUrl?: string, persist: boolean = true, _track?: Song): Promise<Stream> {
         // Downloaded/local songs must not wait on the YouTube client starting up.
         await ensureStorage();
         const { protocol, cleanId } = splitId(id);

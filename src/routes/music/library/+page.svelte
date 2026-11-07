@@ -248,4 +248,9 @@
     .create:hover .plus {
         transform: rotate(90deg) scale(1.08);
     }
+    @media (max-width: 600px) {
+        .toolbar { flex-wrap: wrap; }
+        .filter { width: 100%; min-width: 0; }
+        .head { flex-wrap: wrap; gap: 14px; }
+    }
 </style>

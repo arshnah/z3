@@ -14,6 +14,8 @@ import { Client, type SetActivity, type SetActivityResponse } from '@xhayper/dis
 type Music = typeof MusicRoutes;
 
 const MUSIC_ROUTES = [
+    'scrobbleStatus', 'scrobbleLastfmStart', 'scrobbleLastfmFinish', 'scrobbleListenbrainzConnect',
+    'scrobbleSetEnabled', 'scrobbleDisconnect', 'scrobbleNowPlaying', 'scrobbleSubmit', 'scrobbleRetry',
     'musicLyrics',
     'musicSearchSuggestions',
     'musicSearch',
@@ -198,6 +200,12 @@ async function youtubeArtwork(videoId: string): Promise<string> {
 }
 
 export const routes = {
+    async openScrobblingLink(url: string): Promise<void> {
+        const target = new URL(url);
+        if (target.protocol !== 'https:' || !['www.last.fm', 'last.fm', 'listenbrainz.org'].includes(target.hostname)) throw new Error('Invalid account connection link.');
+        const { shell } = await import('electron');
+        await shell.openExternal(url);
+    },
     ...windowChrome,
     async clearRPC() {
         if (!rpc.user) return;

@@ -18,6 +18,7 @@
     import { debounce } from "$lib/utils";
     import { fly, scale } from "svelte/transition";
     import { tick } from "svelte";
+    import { isAndroid } from '$lib/platform';
 
     const path = $derived(page.url.pathname);
     const onSearch = $derived(path.startsWith("/music/search"));
@@ -67,6 +68,7 @@
     }
 
     function openLibrary() {
+        if (isAndroid) return;
         clearTimeout(libraryTimer);
         libraryOpen = true;
     }
@@ -86,7 +88,7 @@
         </div>
 
         <div class="items">
-            <a href="/music" class="item" class:active={isActive("/music")}><Icon name="sparkles" /><span>Home</span></a>
+            <a href="/music" class="item" aria-label="Home" class:active={isActive("/music")}><Icon name="sparkles" /><span>Home</span></a>
 
             {#if onSearch}
                 <form
@@ -127,12 +129,12 @@
                     </select>
                 </form>
             {:else}
-                <a href="/music/search" class="item"><Icon name="search" /><span>Search</span></a>
+                <a href="/music/search" class="item" aria-label="Search"><Icon name="search" /><span>Search</span></a>
             {/if}
 
             <!-- svelte-ignore a11y_no_static_element_interactions -->
             <div class="lib" onmouseenter={openLibrary} onmouseleave={closeLibrarySoon}>
-                <a href="/music/library" class="item" class:active={isActive("/music/library") || isActive("/music/playlist")}>
+                <a href="/music/library" class="item" aria-label="Library" class:active={isActive("/music/library") || isActive("/music/playlist")}>
                     <Icon name="library-big" /><span>Library</span>
                 </a>
                 {#if libraryOpen}
@@ -156,7 +158,7 @@
                 {/if}
             </div>
 
-            <a href="/music/stats" class="item" class:active={isActive("/music/stats")}><Icon name="chart-no-axes-column" /><span>Stats</span></a>
+            <a href="/music/stats" class="item" aria-label="Stats" class:active={isActive("/music/stats")}><Icon name="chart-no-axes-column" /><span>Stats</span></a>
         </div>
 
         <div class="tail">
@@ -436,5 +438,29 @@
         .item {
             padding: 0 12px;
         }
+    }
+    :global([data-os="android"]) .arrows,
+    :global([data-os="android"]) .tail > button,
+    :global([data-os="android"]) .mark { display: none; }
+
+    @media (max-width: 600px) {
+        :global([data-os="android"]) .dock {
+            width: calc(100vw - 28px);
+            height: auto;
+            min-height: 56px;
+            flex-wrap: wrap;
+            padding: 8px;
+            border-radius: 24px;
+        }
+        :global([data-os="android"]) .items { display: contents; }
+        :global([data-os="android"]) .search {
+            order: 2;
+            width: 100%;
+            flex-basis: 100%;
+            margin-top: 6px;
+        }
+        :global([data-os="android"]) .tail { margin-left: auto; }
+        :global([data-os="android"]) .item { padding: 0 10px; }
+        :global([data-os="android"]) .provider { max-width: 124px; }
     }
 </style>

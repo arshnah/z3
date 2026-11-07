@@ -33,10 +33,13 @@
         viewH = container.clientHeight;
     }
 
-    onMount(() => {
+    $effect(() => {
+        const root = container, content = column;
+        if (!root || !content) return;
         const ro = new ResizeObserver(() => measure());
-        ro.observe(container!);
-        ro.observe(column!);
+        ro.observe(root);
+        ro.observe(content);
+        measure();
         return () => ro.disconnect();
     });
 

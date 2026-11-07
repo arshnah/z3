@@ -687,10 +687,10 @@ export function loadTrack(track: Song | null): Promise<void> {
 
         // Only the audio gates playback. A stream failure propagates so callers
         // can surface it to the user.
-        const stream = await client.musicStream(track.id);
+        const stream = await client.musicStream(track.id, undefined, true, slimSong($state.snapshot(track) as Song));
 
         // If fetching this track also saved it to disk, reflect that in the library.
-        if (stream.savedToDisk) libraryState.markDownloaded(track.id);
+        if (stream.savedToDisk) libraryState.markDownloaded(track.id, track);
 
         const record: CacheRecord = { lyrics: embedded, stream, lyricsPending: true };
         cache.set(track.id, record);

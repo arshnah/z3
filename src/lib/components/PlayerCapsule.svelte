@@ -472,4 +472,9 @@
         font: italic 700 24px "Times New Roman", Georgia, serif;
         padding-bottom: 3px;
     }
+    @media (max-width: 600px) {
+        :global([data-os="android"]) .tools { flex-wrap: wrap; justify-content: center; }
+        :global([data-os="android"]) .vol { display: none; }
+        :global([data-os="android"]) .main > .icon-btn { width: 32px; flex-shrink: 0; }
+    }
 </style>

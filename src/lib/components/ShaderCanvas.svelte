@@ -7,6 +7,7 @@
     import { analyser } from "$lib/audio/analyser";
     import { artworkState, type RGB } from "$lib/state/artwork.svelte";
     import { ShaderRunner, squareArt, type ShaderPack } from "$lib/visualizer/shadertoy";
+    import { isAndroid } from '$lib/platform';
 
     interface Props {
         pack: ShaderPack;
@@ -47,7 +48,7 @@
         const colorsSettled = () => target().every((c, i) => c.every((v, j) => Math.abs(v - shownColors[i][j]) < 0.5));
 
         const resize = () => {
-            const dpr = Math.min(window.devicePixelRatio || 1, 2);
+            const dpr = Math.min(window.devicePixelRatio || 1, isAndroid ? 1.25 : 2);
             const w = Math.max(1, Math.round(canvas!.clientWidth * dpr * pack.scale));
             const h = Math.max(1, Math.round(canvas!.clientHeight * dpr * pack.scale));
             if (canvas!.width !== w || canvas!.height !== h) {
@@ -85,7 +86,7 @@
             // Transitions (new artwork, intensity change) always get full frame rate.
             const settling = artMix < 1 || Math.abs(intensity - shownIntensity) > 0.002 || !colorsSettled();
             if (!animate && !settling && !dirty) return;
-            const fps = features.live || settling ? pack.maxFps : (pack.idleFps ?? pack.maxFps);
+            const fps = isAndroid ? (settling ? 24 : 12) : features.live || settling ? pack.maxFps : (pack.idleFps ?? pack.maxFps);
             const minFrame = fps ? 1000 / fps : 0;
             if (now - lastDraw < minFrame - 1) return;
             const frameDt = Math.min(0.25, (now - lastDraw) / 1000);

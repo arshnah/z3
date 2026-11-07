@@ -2,6 +2,7 @@ import { browser } from "$app/environment";
 import { client } from "$lib/ephaptic";
 import type { Playlist, Song } from "$lib/schema";
 import { toasts } from "$lib/state/toast.svelte";
+import { isAndroid } from '$lib/platform';
 
 export const FAVOURITES_ID = "favourites.m3u8";
 
@@ -122,7 +123,7 @@ class LibraryStore {
         this.downloading[track.id] = true;
         try {
             await client.musicDownloadSong($state.snapshot(track) as Song);
-            this.markDownloaded(track.id);
+            this.markDownloaded(track.id, track);
             if (!quiet) toasts.success(`Downloaded “${track.title}”.`);
             return true;
         } catch (err) {
@@ -257,13 +258,20 @@ class LibraryStore {
     }
 
     /** Mark a track as downloaded across all playlists (called after it's saved to disk). */
-    markDownloaded(trackId: string) {
+    markDownloaded(trackId: string, track?: Song) {
         let changed = false;
-        const next = this.playlists.map((p) => {
+        let next = this.playlists.map((p) => {
             if (!p.tracks.some((t) => t.id === trackId && !t.isDownloaded)) return p;
             changed = true;
             return { ...p, tracks: p.tracks.map((t) => (t.id === trackId ? { ...t, isDownloaded: true } : t)) };
         });
+        if (isAndroid && track) {
+            const downloads = next.find((p) => p.id === 'downloads');
+            if (downloads && !downloads.tracks.some((t) => t.id === trackId)) {
+                next = next.map((p) => p.id === 'downloads' ? { ...p, tracks: [...p.tracks, { ...track, isDownloaded: true }] } : p);
+                changed = true;
+            }
+        }
         if (changed) this.playlists = next;
     }
 }

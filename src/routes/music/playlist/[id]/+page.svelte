@@ -11,10 +11,12 @@
     import { artistNames, formatLongDuration, getThumbnailUrl, slimSong, songKey } from "$lib/utils";
     import type { Song } from "$lib/schema";
     import { tilt } from "$lib/tilt";
+    import { isAndroid } from '$lib/platform';
 
     const id = $derived(decodeURIComponent(page.params.id ?? ""));
     const playlist = $derived(libraryState.getPlaylist(id));
     const isFav = $derived(id === FAVOURITES_ID);
+    const isDownloads = $derived(isAndroid && id === 'downloads');
     const playingHere = $derived(playerState.currentPlaylist?.id === id);
 
     let filter = $state("");
@@ -49,7 +51,7 @@
     }
 
     function changeCover() {
-        if (!playlist) return;
+        if (!playlist || isDownloads) return;
         const input = document.createElement("input");
         input.type = "file";
         input.accept = "image/*";
@@ -85,7 +87,7 @@
         if (!playlist) return;
         ui.openMenuAt(el, [
             { label: "Download all", icon: "download", action: () => libraryState.downloadPlaylist(playlist) },
-            { label: "Change cover…", icon: "image", action: changeCover },
+            ...(!isDownloads ? [{ label: "Change cover…", icon: "image", action: changeCover }] : []),
             ...(!playlist.isProtected
                 ? [
                       { label: "Rename…", icon: "pencil", action: rename },
@@ -110,7 +112,7 @@
     let recsFor = "";
 
     async function loadRecs() {
-        if (!playlist?.tracks.length) {
+        if (isDownloads || !playlist?.tracks.length) {
             recs = [];
             return;
         }
@@ -130,13 +132,14 @@
 
     $effect(() => {
         // Once per playlist visit (and once its tracks are known).
-        if (playlist && recsFor !== id && playlist.tracks.length) {
+        if (!isDownloads && playlist && recsFor !== id && playlist.tracks.length) {
             recsFor = id;
             loadRecs();
         }
     });
 
     async function addRec(track: Song) {
+        if (isDownloads) return;
         recs = recs.filter((t) => t.id !== track.id);
         await libraryState.addToPlaylist(id, track);
     }
@@ -157,16 +160,15 @@
     <div class="page">
         <div class="layout">
             <aside class="sleeve island">
-                <!-- svelte-ignore a11y_click_events_have_key_events -->
-                <div class="cover" role="button" tabindex="0" title="Change cover" use:tilt={{ max: 14 }} onclick={changeCover}>
+                <button type="button" class="cover" disabled={isDownloads} title={isDownloads ? 'Downloaded music' : 'Change cover'} use:tilt={{ max: 14 }} onclick={changeCover}>
                     {#if isFav}
                         <div class="fav-art"><Icon name="heart" /></div>
                     {:else}
                         <Cover src={playlist.thumbnail} thumbnails={playlist.tracks[0]?.thumbnails} title={playlist.name} size="100%" radius="22px" />
                     {/if}
                     <span class="cover-shine"></span>
-                    <span class="cover-edit"><Icon name="image-plus" /></span>
-                </div>
+                    {#if !isDownloads}<span class="cover-edit"><Icon name="image-plus" /></span>{/if}
+                </button>
 
                 <div class="meta">
                     <span class="kicker">{#if isFav}<Icon name="heart" /> Liked songs{:else}<Icon name="disc-3" /> Playlist{/if}</span>
@@ -174,7 +176,7 @@
                     <!-- svelte-ignore a11y_click_events_have_key_events -->
                     <h1 class="name" title={playlist.name} onclick={() => !playlist.isProtected && rename()}>{playlist.name}</h1>
                     <div class="stats">
-                        <span><strong>{playlist.tracks.length}</strong> songs</span>
+                        <span><strong>{playlist.tracks.length}</strong> {playlist.tracks.length === 1 ? 'song' : 'songs'}</span>
                         {#if totalSeconds}<span><strong>{formatLongDuration(totalSeconds)}</strong></span>{/if}
                     </div>
                     {#if playlist.tracks.length}
@@ -219,7 +221,7 @@
                         tracks={view.list}
                         indices={view.indices}
                         {playlist}
-                        reorderable={!filter}
+                        reorderable={!filter && !isDownloads}
                         onreorder={reorder}
                         onplay={(i) => playPlaylist(playlist, view.indices[i])}
                     />
@@ -235,7 +237,7 @@
                     </div>
                 {/if}
 
-                {#if playlist.tracks.length}
+                {#if playlist.tracks.length && !isDownloads}
                     <section class="recs island">
                         <div class="section-head">
                             <div>
@@ -313,6 +315,7 @@
         mix-blend-mode: overlay;
         pointer-events: none;
     }
+    .cover:disabled { opacity: 1; cursor: default; }
     .cover-edit {
         position: absolute;
         right: 12px;
@@ -345,8 +348,8 @@
         background: radial-gradient(120% 100% at 0% 0%, #7c5cff, #4a2bd6 45%, #b04ac9);
     }
     .fav-art :global(svg) {
-        width: 90px;
-        height: 90px;
+        width: 55%;
+        height: 55%;
         fill: #fff;
         filter: drop-shadow(0 10px 20px rgb(0 0 0 / 0.3));
     }
@@ -530,5 +533,24 @@
         .sleeve .filter {
             grid-column: 1 / -1;
         }
+    }
+    @media (max-width: 600px) {
+        .sleeve { grid-template-columns: 96px minmax(0, 1fr); gap: 14px; padding: 14px; }
+        .name { font-size: clamp(24px, 7vw, 32px); overflow-wrap: break-word; }
+        .stats { flex-wrap: wrap; gap: 4px 12px; }
+    }
+    @media (orientation: landscape) and (max-height: 600px) {
+        :global([data-os="android"]) .layout { grid-template-columns: 1fr; gap: 16px; }
+        :global([data-os="android"]) .sleeve {
+            position: static;
+            display: grid;
+            grid-template-columns: 64px minmax(0, 1fr) auto;
+            align-items: center;
+            gap: 16px;
+            padding: 14px;
+        }
+        :global([data-os="android"]) .sleeve .actions { grid-column: auto; }
+        :global([data-os="android"]) .name { font-size: 24px; }
+        :global([data-os="android"]) .stats { flex-wrap: wrap; gap: 4px 12px; }
     }
 </style>
