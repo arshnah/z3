@@ -275,7 +275,7 @@
     }
     .history {
         display: grid;
-        grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+        grid-template-columns: repeat(auto-fill, minmax(min(100%, 340px), 1fr));
         gap: 2px 16px;
     }
     @media (max-width: 960px) {

@@ -313,4 +313,7 @@
     .empty {
         padding: 40px 12px;
     }
+    @media (pointer: coarse) {
+        .q-x { opacity: 1; }
+    }
 </style>

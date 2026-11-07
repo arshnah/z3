@@ -4,6 +4,7 @@
     import { liquidGlass } from "$lib/liquid-glass";
     import { tick } from "svelte";
     import { scale } from "svelte/transition";
+    import { isAndroid } from '$lib/platform';
 
     let menuEl = $state<HTMLDivElement>();
     let pos = $state({ x: 0, y: 0 });
@@ -18,10 +19,12 @@
         pos = { x: menu.x, y: menu.y };
         tick().then(() => {
             if (!menuEl) return;
-            const r = menuEl.getBoundingClientRect();
+            // offset dimensions are stable while the opening scale transition
+            // is running; transformed bounds can place the final menu offscreen.
+            const width = menuEl.offsetWidth, height = menuEl.offsetHeight;
             pos = {
-                x: Math.max(8, Math.min(menu.x, window.innerWidth - r.width - 8)),
-                y: menu.y + r.height > window.innerHeight - 8 ? Math.max(8, menu.y - r.height) : menu.y,
+                x: Math.max(8, Math.min(menu.x, window.innerWidth - width - 8)),
+                y: menu.y + height > window.innerHeight - 8 ? Math.max(8, menu.y - height) : menu.y,
             };
         });
     });
@@ -63,9 +66,12 @@
                 class:danger={item.danger}
                 class:open={!nested && sub?.index === i}
                 disabled={item.disabled}
-                onclick={() => run(item)}
+                onclick={(event) => {
+                    if (isAndroid && !nested && item.submenu) openSub(i, event);
+                    else run(item);
+                }}
                 onmouseenter={(e) => {
-                    if (!nested) {
+                    if (!isAndroid && !nested) {
                         if (item.submenu) openSub(i, e);
                         else sub = null;
                     }
@@ -91,16 +97,22 @@
     <div class="catcher" onclick={() => ui.closeMenu()} oncontextmenu={(e) => { e.preventDefault(); ui.closeMenu(); }}></div>
     <div
         class="menu glass"
-        use:liquidGlass={{ enabled: ui.liquidGlass, depth: 7, blur: 10 }}
+        use:liquidGlass={{ enabled: ui.liquidGlass && !isAndroid, depth: 7, blur: 10 }}
         bind:this={menuEl}
         style:left="{pos.x}px"
         style:top="{pos.y}px"
         role="menu"
         transition:scale={{ start: 0.94, duration: 140, opacity: 0 }}
     >
-        {@render items(ui.menu.items, false)}
+        {#if isAndroid && sub && ui.menu.items[sub.index]?.submenu}
+            <button class="item" onclick={() => (sub = null)}><span class="icon"><Icon name="chevron-left" /></span> Back</button>
+            <div class="sep"></div>
+            {@render items(ui.menu.items[sub.index].submenu!, true)}
+        {:else}
+            {@render items(ui.menu.items, false)}
+        {/if}
     </div>
-    {#if sub && ui.menu.items[sub.index]?.submenu}
+    {#if !isAndroid && sub && ui.menu.items[sub.index]?.submenu}
         <div
             class="menu glass sub"
             bind:this={subEl}
@@ -177,4 +189,9 @@
         margin: 4px 6px;
         background: var(--border);
     }
+    :global([data-os="android"]) .menu {
+        width: min(300px, calc(100vw - 24px));
+        background: rgb(14 12 20 / 0.96);
+    }
+    :global([data-os="android"]) .item { min-height: 44px; height: auto; padding-block: 10px; }
 </style>

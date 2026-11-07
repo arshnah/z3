@@ -2,7 +2,7 @@
 <html lang="en">
 	<head>
 		<meta charset="utf-8" />
-		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
 		<meta name="color-scheme" content="dark" />
 		<meta name="theme-color" content="#07060b" />
 		%sveltekit.head%
@@ -14,7 +14,9 @@
 			// top bars can leave room for the native window buttons: macOS keeps
 			// its traffic lights on the left, Windows and Linux draw theirs on the
 			// right.
-			document.documentElement.dataset.os = /Mac|iPhone|iPad/.test(navigator.userAgent)
+			document.documentElement.dataset.os = /Android/.test(navigator.userAgent)
+				? "android"
+				: /Mac|iPhone|iPad/.test(navigator.userAgent)
 				? "mac"
 				: /Windows/.test(navigator.userAgent)
 					? "win"

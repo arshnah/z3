@@ -4,6 +4,21 @@
     import { playerState, setAutoplay } from "$lib/state/player.svelte";
     import { ui } from "$lib/state/ui.svelte";
     import { VISUALIZER_PACKS } from "$lib/visualizer/packs";
+    import { isAndroid } from '$lib/platform';
+    import { libraryState } from '$lib/state/library.svelte';
+    import { toasts } from '$lib/state/toast.svelte';
+    import { androidPreferences } from '$lib/state/android.svelte';
+    import ScrobblingSettings from '$lib/components/ScrobblingSettings.svelte';
+
+    let importing = $state(false);
+    async function importMusic() {
+        importing = true;
+        try {
+            await (await import('$lib/android/client')).importAudio();
+            await libraryState.refresh();
+        } catch (error) { toasts.error(error); }
+        finally { importing = false; }
+    }
 
     let draft = $state("");
     let initialised = $state(false);
@@ -32,6 +47,34 @@
     <header class="head">
         <h1 class="page-title">Settings</h1>
     </header>
+
+    {#if isAndroid}
+    <section class="group">
+        <h2><Icon name="smartphone" /> On this device</h2>
+        <div class="card block">
+            <p class="muted">Downloads and songs played from your playlists are saved on this phone for offline listening. Import your own audio files to add them to Downloads in your library.</p>
+            <button class="btn" onclick={importMusic} disabled={importing}>
+                <Icon name="folder-open" /> {importing ? 'Importing…' : 'Import audio files'}
+            </button>
+            <small class="subtle">App storage is removed when you uninstall Zeta.</small>
+        </div>
+    </section>
+    <section class="group">
+        <h2><Icon name="smartphone" /> Android</h2>
+        <div class="card rows">
+            <div class="row">
+                <div><strong>Haptic feedback</strong><p>A subtle vibration when you tap controls.</p></div>
+                <button class="switch" role="switch" aria-label="Haptic feedback" aria-checked={androidPreferences.haptics}
+                    onclick={() => { androidPreferences.haptics = !androidPreferences.haptics; androidPreferences.save(); }}></button>
+            </div>
+            <div class="row">
+                <div><strong>Keep screen awake</strong><p>Keep the display on while music plays. Uses more battery.</p></div>
+                <button class="switch" role="switch" aria-label="Keep screen awake" aria-checked={androidPreferences.keepAwake}
+                    onclick={() => { androidPreferences.keepAwake = !androidPreferences.keepAwake; androidPreferences.save(); }}></button>
+            </div>
+        </div>
+    </section>
+    {/if}
 
     <section class="group">
         <h2><Icon name="play" /> Playback</h2>
@@ -108,6 +151,9 @@
         </div>
     </section>
 
+    <ScrobblingSettings />
+
+    {#if !isAndroid}
     <section class="group">
         <h2><Icon name="folder" /> Music folder</h2>
         <div class="card block">
@@ -161,6 +207,7 @@
             </div>
         </div>
     </section>
+    {/if}
 </div>
 
 <style>

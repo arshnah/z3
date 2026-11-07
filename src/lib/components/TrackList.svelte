@@ -344,4 +344,7 @@
     .track:hover .more {
         opacity: 1;
     }
+    @media (pointer: coarse) {
+        .fav, .more { opacity: 1; }
+    }
 </style>

@@ -63,6 +63,7 @@
     class:vis={mode === "visualizer"}
     class:idle={idle && mode === "visualizer"}
     onmousemove={wake}
+    onpointerdown={wake}
     in:fly={{ y: 60, duration: 520, opacity: 0, easing: (t) => 1 - Math.pow(1 - t, 4) }}
     out:fly={{ y: 60, duration: 320, opacity: 0 }}
 >
@@ -688,5 +689,65 @@
         .packs {
             display: none;
         }
+    }
+    @media (max-width: 600px) {
+        :global([data-os="android"]) .top {
+            grid-template-columns: auto 1fr;
+            padding: calc(12px + env(safe-area-inset-top, 0px)) 16px 12px;
+        }
+        :global([data-os="android"]) .from { justify-self: center; max-width: 70vw; }
+        :global([data-os="android"]) .top-right { grid-column: 1 / -1; justify-content: center; margin-top: 10px; }
+        :global([data-os="android"]) .packs-bar {
+            position: static;
+            translate: none;
+            grid-column: 1 / -1;
+            justify-self: center;
+            margin-top: 8px;
+        }
+        :global([data-os="android"]) .packs { display: flex; }
+        :global([data-os="android"]) .stage {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 24px;
+            overflow-y: auto;
+            padding: 0 20px calc(20px + env(safe-area-inset-bottom, 0px));
+        }
+        :global([data-os="android"]) .left { flex-shrink: 0; }
+        :global([data-os="android"]) .stage:not(.no-lyrics) .right {
+            display: block;
+            flex-shrink: 0;
+            width: 100%;
+            height: 60dvh;
+        }
+        :global([data-os="android"]) .split { grid-template-columns: 1fr; overflow-y: auto; }
+        :global([data-os="android"]) .vis-pane { min-height: 320px; }
+    }
+    :global([data-os="android"]) .vis .top {
+        background: linear-gradient(180deg, rgb(7 6 11 / 0.86), rgb(7 6 11 / 0.45));
+        backdrop-filter: blur(12px);
+    }
+    :global([data-os="android"]) .vis-bottom {
+        background: linear-gradient(0deg, rgb(7 6 11 / 0.94), rgb(7 6 11 / 0.64) 75%, transparent);
+    }
+    @media (max-width: 600px) and (orientation: portrait) {
+        :global([data-os="android"]) .left { gap: 16px; }
+        :global([data-os="android"]) .art-slot {
+            width: min(100%, max(140px, calc(100dvh - 380px)));
+            align-self: center;
+        }
+    }
+    @media (orientation: landscape) and (max-height: 600px) {
+        :global([data-os="android"]) .stage { display: block; overflow-y: auto; }
+        :global([data-os="android"]) .left {
+            display: grid;
+            grid-template-columns: minmax(120px, 200px) minmax(0, 1fr);
+            align-items: center;
+            width: min(100%, 720px);
+            margin: 0 auto 20px;
+            gap: 16px;
+        }
+        :global([data-os="android"]) .art-slot { grid-row: 1 / span 2; }
+        :global([data-os="android"]) .stage:not(.no-lyrics) .right { display: block; width: 100%; height: 60dvh; }
     }
 </style>

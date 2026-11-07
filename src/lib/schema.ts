@@ -20,6 +20,10 @@ export interface Song {
 
 export interface Stream {
     data: Uint8Array;
+    /** Android serves audio from native files without copying it over the bridge. */
+    url?: string;
+    /** Original native file URI for Android's background player. */
+    nativeUri?: string;
     mimetype: string;
     /** True when the bytes are backed by a file on disk (served or just saved). */
     savedToDisk?: boolean;

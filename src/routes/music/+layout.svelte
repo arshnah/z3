@@ -13,13 +13,17 @@
     import { page } from "$app/state";
     import { afterNavigate } from "$app/navigation";
     import { fly } from "svelte/transition";
+    import { isAndroid } from '$lib/platform';
 
     let { children } = $props();
 
     let main = $state<HTMLElement>();
 
     // Each page starts at the top.
-    afterNavigate(() => main?.scrollTo({ top: 0 }));
+    afterNavigate(() => {
+        main?.scrollTo({ top: 0 });
+        if (isAndroid && ui.sidePanel) { ui.sidePanel = null; ui.save(); }
+    });
 </script>
 
 <AmbientBackground
@@ -27,7 +31,7 @@
     hidden={ui.nowPlayingOpen && ui.nowPlayingMode !== "lyrics"}
 />
 
-<TitleBar hidden={ui.nowPlayingOpen} />
+{#if !isAndroid}<TitleBar hidden={ui.nowPlayingOpen} />{/if}
 
 <div class="world" class:behind={ui.nowPlayingOpen} class:panel-open={!!ui.sidePanel}>
     <main bind:this={main}>
@@ -60,7 +64,7 @@
     .world {
         position: relative;
         z-index: 1;
-        height: 100vh;
+        height: 100dvh;
         transition: opacity 0.5s var(--ease-out), scale 0.6s var(--ease-out), visibility 0s;
     }
     /* Recede while the full-screen player is up, then stop painting entirely. */
@@ -88,5 +92,10 @@
     }
     .route {
         min-height: 100%;
+    }
+    @media (max-width: 600px) {
+        :global([data-os="android"]) .world:has(:global(.search)) main {
+            padding-top: calc(var(--titlebar-h) + 128px);
+        }
     }
 </style>

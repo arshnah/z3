@@ -4,6 +4,7 @@ import { libraryState, FAVOURITES_ID } from "$lib/state/library.svelte";
 import { addToQueue, playNext, playTrack, startRadio } from "$lib/state/player.svelte";
 import { toasts } from "$lib/state/toast.svelte";
 import { ui, type MenuItem } from "$lib/state/ui.svelte";
+import { isAndroid } from '$lib/platform';
 
 export function songUrl(track: Song): string | null {
     if (track.id.startsWith("yt:")) return `https://music.youtube.com/watch?v=${track.id.slice(3)}`;
@@ -33,7 +34,7 @@ export function playlistSubmenu(track: Song): MenuItem[] {
     return [
         { label: "New playlist…", icon: "plus", action: () => createPlaylistWith(track) },
         { separator: true },
-        ...libraryState.playlists.map((p) => ({
+        ...libraryState.playlists.filter((p) => !isAndroid || p.id !== 'downloads').map((p) => ({
             label: p.name,
             icon: p.id === FAVOURITES_ID ? "heart" : "list-music",
             checked: libraryState.isInPlaylist(p.id, track.id),
@@ -46,7 +47,17 @@ export function playlistSubmenu(track: Song): MenuItem[] {
 export function trackMenu(track: Song, opts: { playlist?: Playlist | null; extra?: MenuItem[] } = {}): MenuItem[] {
     const fav = libraryState.isFavourite(track.id);
     const url = songUrl(track);
-    const editable = opts.playlist && libraryState.playlists.some((p) => p.id === opts.playlist!.id);
+    const editable = opts.playlist && !(isAndroid && opts.playlist.id === 'downloads') && libraryState.playlists.some((p) => p.id === opts.playlist!.id);
+    const index = opts.playlist?.tracks.findIndex((song) => song.id === track.id) ?? -1;
+    const move = async (delta: number) => {
+        const playlist = opts.playlist ? libraryState.getPlaylist(opts.playlist.id) : undefined;
+        if (!playlist) return;
+        const ids = playlist.tracks.map((song) => song.id);
+        const from = ids.indexOf(track.id), to = from + delta;
+        if (from < 0 || to < 0 || to >= ids.length) return;
+        [ids[from], ids[to]] = [ids[to], ids[from]];
+        await libraryState.reorderPlaylist(playlist.id, ids);
+    };
 
     return [
         { label: "Play", icon: "play", action: () => playTrack(track) },
@@ -59,7 +70,18 @@ export function trackMenu(track: Song, opts: { playlist?: Playlist | null; extra
         ...(editable
             ? [{ label: "Remove from this playlist", icon: "trash-2", danger: true, action: () => libraryState.removeFromPlaylist(opts.playlist!.id, track.id) }]
             : []),
+        ...(isAndroid && editable ? [
+            { label: 'Move up', icon: 'arrow-up', disabled: index <= 0, action: () => move(-1) },
+            { label: 'Move down', icon: 'arrow-down', disabled: index < 0 || index >= (opts.playlist?.tracks.length ?? 0) - 1, action: () => move(1) },
+        ] : []),
         ...(!track.isDownloaded ? [{ label: "Download", icon: "download", action: () => libraryState.download(track) }] : []),
+        ...(isAndroid ? [{
+            label: track.isDownloaded ? 'Share audio file…' : 'Share song…', icon: 'share-2',
+            action: async () => {
+                try { await (await import('$lib/android/share')).shareSong(track); }
+                catch (error) { if (!/share cancel(?:led|ed)/i.test((error as Error).message)) toasts.error(error); }
+            },
+        }] : []),
         ...(url
             ? [
                   { separator: true },

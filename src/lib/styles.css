@@ -86,6 +86,25 @@
     --wc-right: 116px;
 }
 
+[data-os="android"] {
+    --titlebar-h: env(safe-area-inset-top, 0px);
+    --window-radius: 0px;
+}
+
+[data-os="android"] .capsule {
+    bottom: calc(12px + env(safe-area-inset-bottom, 0px));
+    max-width: calc(100vw - 24px);
+}
+
+[data-os="android"] .world main {
+    padding-bottom: calc(120px + env(safe-area-inset-bottom, 0px));
+    scroll-padding-bottom: calc(120px + env(safe-area-inset-bottom, 0px));
+}
+[data-os="android"] .world:has(.capsule.expanded) main {
+    padding-bottom: calc(240px + env(safe-area-inset-bottom, 0px));
+    scroll-padding-bottom: calc(240px + env(safe-area-inset-bottom, 0px));
+}
+
 /* Linux: a transparent window around a rounded, clipped app shell, since the
    window manager doesn't round frameless windows. */
 [data-os="linux"] html,

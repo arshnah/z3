@@ -5,11 +5,11 @@ import electron from 'vite-plugin-electron/simple'
 import { notBundle } from 'vite-plugin-electron/plugin';
 import type { ChildProcess } from 'node:child_process';
 
-export default defineConfig({
+export default defineConfig(({ mode }) => ({
     plugins: [
         sveltekit(),
         devtoolsJson(),
-        electron({
+        mode !== 'android' && electron({
             main: {
                 // main.ts runs in Electron's main process; backend.ts is the
                 // utility process that does all the heavy lifting.
@@ -53,4 +53,4 @@ export default defineConfig({
             },
         }),
     ],
-});
+}));
