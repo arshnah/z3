@@ -30,6 +30,7 @@
         setShuffle,
         setRepeat,
         refreshAutoplay,
+        isRadioContext,
     } from "$lib/state/player.svelte";
     import { libraryState } from "$lib/state/library.svelte";
     import { artworkState } from "$lib/state/artwork.svelte";
@@ -168,14 +169,19 @@
 
         // Skip onward so playback keeps going — unless we've already skipped
         // through a whole playlist's worth of failures.
-        const limit = playerState.currentPlaylist?.tracks.length ?? 3;
-        if (isNextTrackAvailable() && failCount < limit) {
+        const radio = isRadioContext();
+        const limit = radio ? 3 : (playerState.currentPlaylist?.tracks.length ?? 3);
+        if (isNextTrackAvailable() && (radio ? failCount + 1 < limit : failCount < limit)) {
             failCount++;
-            toasts.error(`Skipping “${track.title}”: ${msg}`);
+            if (!radio) toasts.error(`Skipping “${track.title}”: ${msg}`);
             nextTrack();
         } else {
             failCount = 0;
-            toasts.error(`Couldn't play “${track.title}”: ${msg}`);
+            toasts.error(
+                radio
+                    ? `Autoplay stopped after ${limit} unavailable tracks: ${msg}`
+                    : `Couldn't play “${track.title}”: ${msg}`,
+            );
         }
     }
 
