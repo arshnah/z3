@@ -86,6 +86,19 @@
                 </div>
                 <button class="switch" role="switch" aria-label="Autoplay" aria-checked={playerState.autoplay} onclick={() => setAutoplay(!playerState.autoplay)}></button>
             </div>
+            <div class="row">
+                <div>
+                    <strong>Prefer local search results</strong>
+                    <p>Play a matching song from your downloaded library when you select a search result.</p>
+                </div>
+                <button
+                    class="switch"
+                    role="switch"
+                    aria-label="Prefer local search results"
+                    aria-checked={settingsState.preferLocalSearchResults}
+                    onclick={() => settingsState.setPreferLocalSearchResults(!settingsState.preferLocalSearchResults)}
+                ></button>
+            </div>
         </div>
     </section>
 

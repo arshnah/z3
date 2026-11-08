@@ -9,6 +9,8 @@
     import { ui } from "$lib/state/ui.svelte";
     import { trackMenu, radioFrom, openArtist, openCollection, playCollection, collectionMenu } from "$lib/actions";
     import { toasts } from "$lib/state/toast.svelte";
+    import { libraryState } from "$lib/state/library.svelte";
+    import { settingsState } from "$lib/state/settings.svelte";
     import { tilt } from "$lib/tilt";
     import type { Playlist } from "$lib/schema";
 
@@ -34,13 +36,16 @@
     const artists = $derived(searchState.artists);
     const albums = $derived(searchState.albums);
     const top = $derived(results[0]);
-    const topPlaying = $derived(!!top && playerState.currentTrack?.id === top.id);
+    function playbackTrack(track: (typeof results)[number]) {
+        return settingsState.preferLocalSearchResults ? libraryState.findLocalTrack(track) ?? track : track;
+    }
+    const topPlaying = $derived(!!top && playerState.currentTrack?.id === playbackTrack(top).id);
 
     // "Play all" plays through the results as a context.
     const resultsContext = $derived<Playlist>({
         id: `search:${searchState.lastQuery}`,
         name: `Search · “${searchState.lastQuery}”`,
-        tracks: results,
+        tracks: results.map(playbackTrack),
         createdAt: 0,
         isProtected: true,
     });
@@ -92,7 +97,7 @@
                 class="top island"
                 role="button"
                 tabindex="0"
-                onclick={(e) => !(e.target as HTMLElement).closest("button, a") && (topPlaying ? togglePlay() : playTrack(top))}
+                onclick={(e) => !(e.target as HTMLElement).closest("button, a") && (topPlaying ? togglePlay() : playTrack(playbackTrack(top)))}
                 oncontextmenu={(e) => ui.openMenu(e, trackMenu(top))}
             >
                 <div class="top-art" use:tilt={{ max: 12 }}>
@@ -111,7 +116,7 @@
                         onclick={(e) => {
                             e.stopPropagation();
                             if (topPlaying) togglePlay();
-                            else playTrack(top);
+                            else playTrack(playbackTrack(top));
                         }}
                     >
                         <Icon name={topPlaying && !playerState.paused ? "pause" : "play"} />
@@ -126,14 +131,14 @@
                     <button
                         class="chip"
                         onclick={() => {
-                            results.forEach((t) => addToQueue(t));
+                            results.forEach((t) => addToQueue(playbackTrack(t)));
                             toasts.success(`Queued ${results.length} songs`);
                         }}
                     >
                         <Icon name="list-end" /> Queue all
                     </button>
                 </div>
-                <TrackList tracks={results} showAlbum={true} onplay={(i) => playTrack(results[i])} />
+                <TrackList tracks={results} showAlbum={true} onplay={(i) => playTrack(playbackTrack(results[i]))} />
             </div>
         </div>
 

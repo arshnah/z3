@@ -3,9 +3,14 @@ import { client } from "$lib/ephaptic";
 import { libraryState } from "$lib/state/library.svelte";
 import { toasts } from "$lib/state/toast.svelte";
 
+const PREFER_LOCAL_SEARCH_KEY = "zeta:prefer-local-search-results";
+
 class SettingsStore {
     musicDir = $state<string>("");
     isRemote = $state<boolean>(false);
+    preferLocalSearchResults = $state<boolean>(
+        browser && localStorage.getItem(PREFER_LOCAL_SEARCH_KEY) === "true",
+    );
     loading = $state<boolean>(true);
     saving = $state<boolean>(false);
 
@@ -55,6 +60,16 @@ class SettingsStore {
             return false;
         } finally {
             this.saving = false;
+        }
+    }
+
+    setPreferLocalSearchResults(enabled: boolean) {
+        try {
+            if (enabled) localStorage.setItem(PREFER_LOCAL_SEARCH_KEY, "true");
+            else localStorage.removeItem(PREFER_LOCAL_SEARCH_KEY);
+            this.preferLocalSearchResults = enabled;
+        } catch (err) {
+            toasts.error(err);
         }
     }
 
