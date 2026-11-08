@@ -121,7 +121,7 @@ export function collectionMenu(col: CollectionSummary | CollectionDetails): Menu
         { label: `Save as new playlist (“${col.title}”)`, icon: "plus", action: () => saveCollectionToLibrary(col) },
         { separator: true },
         ...libraryState.playlists
-            .filter((p) => !isAndroid || p.id !== "downloads")
+            .filter((p) => p.id !== "music-folder" && (!isAndroid || p.id !== "downloads"))
             .map((p) => ({
                 label: p.name,
                 icon: p.id === FAVOURITES_ID ? "heart" : "list-music",
@@ -172,7 +172,7 @@ export function playlistSubmenu(track: Song): MenuItem[] {
     return [
         { label: "New playlist…", icon: "plus", action: () => createPlaylistWith(track) },
         { separator: true },
-        ...libraryState.playlists.filter((p) => !isAndroid || p.id !== 'downloads').map((p) => ({
+        ...libraryState.playlists.filter((p) => p.id !== 'music-folder' && (!isAndroid || p.id !== 'downloads')).map((p) => ({
             label: p.name,
             icon: p.id === FAVOURITES_ID ? "heart" : "list-music",
             checked: libraryState.isInPlaylist(p.id, track.id),
@@ -185,7 +185,7 @@ export function playlistSubmenu(track: Song): MenuItem[] {
 export function trackMenu(track: Song, opts: { playlist?: Playlist | null; extra?: MenuItem[] } = {}): MenuItem[] {
     const fav = libraryState.isFavourite(track.id);
     const url = songUrl(track);
-    const editable = opts.playlist && !(isAndroid && opts.playlist.id === 'downloads') && libraryState.playlists.some((p) => p.id === opts.playlist!.id);
+    const editable = opts.playlist && opts.playlist.id !== 'music-folder' && !(isAndroid && opts.playlist.id === 'downloads') && libraryState.playlists.some((p) => p.id === opts.playlist!.id);
     const index = opts.playlist?.tracks.findIndex((song) => song.id === track.id) ?? -1;
     const move = async (delta: number) => {
         const playlist = opts.playlist ? libraryState.getPlaylist(opts.playlist.id) : undefined;

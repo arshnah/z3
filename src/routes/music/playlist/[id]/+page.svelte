@@ -17,7 +17,7 @@
     const id = $derived(decodeURIComponent(page.params.id ?? ""));
     const playlist = $derived(libraryState.getPlaylist(id));
     const isFav = $derived(id === FAVOURITES_ID);
-    const isDownloads = $derived(isAndroid && id === 'downloads');
+    const isDownloads = $derived((isAndroid && id === 'downloads') || id === 'music-folder');
     const playingHere = $derived(playerState.currentPlaylist?.id === id);
 
     let filter = $state("");

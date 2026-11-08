@@ -204,7 +204,7 @@
                     { label: "New playlist…", icon: "plus", action: saveArtistSongsAsPlaylist },
                     { separator: true },
                     ...libraryState.playlists
-                        .filter((p) => !isAndroid || p.id !== "downloads")
+                        .filter((p) => p.id !== "music-folder" && (!isAndroid || p.id !== "downloads"))
                         .map((p) => ({
                             label: p.name,
                             icon: p.id === FAVOURITES_ID ? "heart" : "list-music",

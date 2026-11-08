@@ -488,8 +488,7 @@
                     type: 2, // Listening
                     details: track.title,
                     state: artistNames(track),
-                    name: "Zeta Music",
-                    statusDisplayType: 2, // Show the song title in Discord's compact status.
+                    name: track.title,
                     startTimestamp: Math.round(now - position * 1000),
                     ...(total > 0 ? { endTimestamp: Math.round(now + Math.max(0, total - position) * 1000) } : {}),
                     largeImageUrl: art,
