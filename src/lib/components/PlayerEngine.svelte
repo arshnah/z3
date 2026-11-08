@@ -496,15 +496,6 @@
                     largeImageKey: art,
                     smallImageText: "Zeta Music",
                     smallImageKey: "zeta",
-                    buttons: [
-                        { label: "Zeta Music GitHub", url: "https://github.com/zeta-zx/z3" },
-                        {
-                            label: "Play on YouTube Music",
-                            url: track.id.startsWith("yt:")
-                                ? `https://music.youtube.com/watch?v=${encodeURIComponent(track.id.slice(3))}`
-                                : `https://music.youtube.com/search?q=${encodeURIComponent([track.title, artistNames(track)].filter(Boolean).join(" "))}`,
-                        },
-                    ],
                 });
             })
             .catch(console.error);
