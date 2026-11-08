@@ -9,7 +9,8 @@
     import { libraryState, FAVOURITES_ID } from "$lib/state/library.svelte";
     import { playerState, playPlaylist, togglePlay, setShuffle } from "$lib/state/player.svelte";
     import { ui } from "$lib/state/ui.svelte";
-    import { artistNames, formatLongDuration, getThumbnailUrl, slimSong, songKey } from "$lib/utils";
+    import { artistNames, formatLongDuration, getThumbnailUrl, slimSong } from "$lib/utils";
+    import { filterPlaylistRecommendations } from "$lib/playlist-recommendations";
     import type { Song } from "$lib/schema";
     import { tilt } from "$lib/tilt";
     import { isAndroid } from '$lib/platform';
@@ -122,8 +123,10 @@
         const exclude = playlist.tracks.map((t) => t.id);
         try {
             const out = await client.musicRadio(slimSong($state.snapshot(seed) as Song), exclude);
-            const have = new Set(playlist.tracks.map(songKey));
-            recs = out.filter((t) => !libraryState.isInPlaylist(id, t.id) && !have.has(songKey(t))).slice(0, 8);
+            recs = filterPlaylistRecommendations(
+                out.filter((track) => !libraryState.isInPlaylist(id, track.id)),
+                playlist.tracks,
+            );
         } catch {
             recs = [];
         } finally {

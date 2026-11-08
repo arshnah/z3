@@ -6,6 +6,8 @@
     import { playerState, playPlaylist, togglePlay } from "$lib/state/player.svelte";
     import { ui } from "$lib/state/ui.svelte";
     import { createPlaylistWith, openPlaylist } from "$lib/actions";
+    import { settingsState } from "$lib/state/settings.svelte";
+    import { isAndroid } from "$lib/platform";
     import { formatLongDuration } from "$lib/utils";
     import type { Playlist } from "$lib/schema";
 
@@ -29,6 +31,24 @@
     function play(p: Playlist) {
         if (playerState.currentPlaylist?.id === p.id) togglePlay();
         else playPlaylist(p);
+    }
+
+    function importMenu(e: MouseEvent) {
+        ui.openMenu(e, [
+            { label: "Import M3U playlist…", icon: "list-music", action: () => settingsState.importM3uPlaylist() },
+            { label: "Import Spotify CSV…", icon: "list-music", action: () => settingsState.importSpotifyPlaylist() },
+            {
+                label: "Import YouTube playlist…",
+                icon: "list-music",
+                action: async () => {
+                    const url = await ui.prompt("Import YouTube playlist", {
+                        placeholder: "https://www.youtube.com/playlist?list=…",
+                        confirmLabel: "Import",
+                    });
+                    if (url) await settingsState.importYoutubePlaylist(url);
+                },
+            },
+        ]);
     }
 
     function menu(e: MouseEvent, p: Playlist) {
@@ -73,7 +93,12 @@
                 <span class="path" title={libraryState.path}><Icon name="folder" /> {libraryState.path || "…"}</span>
             </p>
         </div>
-        <button class="btn btn-primary" onclick={() => createPlaylistWith()}><Icon name="plus" /> New playlist</button>
+        <div class="head-actions">
+            {#if !isAndroid}
+                <button class="btn" onclick={importMenu}><Icon name="download" /> Import playlist</button>
+            {/if}
+            <button class="btn btn-primary" onclick={() => createPlaylistWith()}><Icon name="plus" /> New playlist</button>
+        </div>
     </header>
 
     <div class="toolbar">
@@ -139,6 +164,12 @@
         justify-content: space-between;
         gap: 16px;
         padding: 18px 4px 26px;
+    }
+    .head-actions {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        flex-shrink: 0;
     }
     .head-text {
         display: flex;
@@ -252,5 +283,6 @@
         .toolbar { flex-wrap: wrap; }
         .filter { width: 100%; min-width: 0; }
         .head { flex-wrap: wrap; gap: 14px; }
+        .head-actions { margin-left: auto; }
     }
 </style>
