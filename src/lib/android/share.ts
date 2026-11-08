@@ -7,7 +7,7 @@ export async function shareSong(song: Song) {
     const text = `${song.title} — ${song.artists.map((a) => a.name).join(', ')}`;
     const stored = (await androidStorage.snapshot()).songs[song.id];
     if (stored?.file) {
-        const extensions: Record<string, string> = { 'audio/mpeg': 'mp3', 'audio/x-wav': 'wav', 'audio/wav': 'wav', 'audio/flac': 'flac', 'audio/ogg': 'ogg', 'audio/webm': 'webm' };
+        const extensions: Record<string, string> = { 'audio/mpeg': 'mp3', 'audio/x-wav': 'wav', 'audio/wav': 'wav', 'audio/flac': 'flac', 'audio/x-flac': 'flac', 'audio/ogg': 'ogg', 'audio/webm': 'webm' };
         const extension = extensions[stored.mimetype ?? ''] ?? 'm4a';
         const name = song.title.replace(/\.(mp3|m4a|mp4|aac|wav|flac|ogg|opus|webm)$/i, '')
             .replace(/[<>:"/\\|?*\x00-\x1f]/g, '_').slice(0, 80) || 'Zeta song';
