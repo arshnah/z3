@@ -1515,9 +1515,14 @@ export const routes = {
 
     /* ------------------------------ settings ------------------------------ */
 
-    async getSettings(): Promise<{ musicDir: string; isRemote: boolean }> {
-        const { musicDir } = getConfig();
-        return { musicDir, isRemote: /^(sftp|ftp|ftps):\/\//i.test(musicDir) };
+    async getSettings(): Promise<{ musicDir: string; isRemote: boolean; discordRpcEnabled: boolean }> {
+        const { musicDir, discordRpcEnabled } = getConfig();
+        return { musicDir, isRemote: /^(sftp|ftp|ftps):\/\//i.test(musicDir), discordRpcEnabled };
+    },
+
+    async setDiscordRpcEnabled(enabled: boolean): Promise<boolean> {
+        if (typeof enabled !== 'boolean') throw new Error('Invalid Discord Rich Presence setting.');
+        return saveConfig({ discordRpcEnabled: enabled }).discordRpcEnabled;
     },
 
     /** Switch the music directory. Validates connectivity, then reloads. */

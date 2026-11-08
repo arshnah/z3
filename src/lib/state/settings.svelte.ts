@@ -8,6 +8,7 @@ const PREFER_LOCAL_SEARCH_KEY = "zeta:prefer-local-search-results";
 class SettingsStore {
     musicDir = $state<string>("");
     isRemote = $state<boolean>(false);
+    discordRpcEnabled = $state<boolean>(false);
     preferLocalSearchResults = $state<boolean>(
         browser && localStorage.getItem(PREFER_LOCAL_SEARCH_KEY) === "true",
     );
@@ -22,9 +23,10 @@ class SettingsStore {
     async load() {
         this.loading = true;
         try {
-            const { musicDir, isRemote } = await client.getSettings();
+            const { musicDir, isRemote, discordRpcEnabled } = await client.getSettings();
             this.musicDir = musicDir;
             this.isRemote = isRemote;
+            this.discordRpcEnabled = discordRpcEnabled;
         } catch (err) {
             toasts.error(err);
         } finally {
@@ -60,6 +62,14 @@ class SettingsStore {
             return false;
         } finally {
             this.saving = false;
+        }
+    }
+
+    async setDiscordRpcEnabled(enabled: boolean) {
+        try {
+            this.discordRpcEnabled = await client.setDiscordRpcEnabled(enabled);
+        } catch (err) {
+            toasts.error(err);
         }
     }
 

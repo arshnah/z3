@@ -6,6 +6,7 @@
      * keyboard shortcuts. Renders nothing visible.
      */
     import { client } from "$lib/ephaptic";
+    import { settingsState } from "$lib/state/settings.svelte";
     import { goto } from "$app/navigation";
     import { untrack, onDestroy } from "svelte";
     import {
@@ -217,7 +218,8 @@
         untrack(() => {
             const names = (s: Song) => s.artists.map((a) => a.name).join("\u0000");
             const coverChanged = fresh.thumbnails.length !== current.thumbnails.length;
-            if (fresh.title === current.title && names(fresh) === names(current) && !coverChanged) return;
+            const albumChanged = fresh.album?.title !== current.album?.title;
+            if (fresh.title === current.title && names(fresh) === names(current) && !coverChanged && !albumChanged) return;
             Object.assign(current, {
                 title: fresh.title,
                 artists: fresh.artists,
@@ -452,7 +454,7 @@
         // Every publish invalidates any artwork lookup still in flight, so a
         // slow one can't land after a newer track's (or after a pause).
         const token = ++rpcToken;
-        if (!track || playerState.paused) {
+        if (!track || playerState.paused || !settingsState.discordRpcEnabled) {
             client.clearRPC().catch(() => {});
             return;
         }
@@ -460,9 +462,8 @@
         const total = playerState.duration || track.duration || 0;
         const now = Date.now();
         // Discord fetches the image itself, so only a real web URL works; the
-        // biggest one is the least blurry. Library songs usually have no web
-        // URL at all (their cover is embedded), so the backend falls back to
-        // the song's public YouTube thumbnail using its video id.
+        // biggest one is the least blurry. For local tracks without a public
+        // thumbnail, the backend searches Apple Music using track metadata.
         const urls = [
             ...new Set(
                 track.thumbnails
@@ -474,20 +475,30 @@
         ];
 
         client
-            .rpcArtwork(track.id, urls)
+            .rpcArtwork(track.id, urls, track.title, track.artists.map((artist) => artist.name), track.album?.title)
             .then((art) => {
                 if (token !== rpcToken) return;
                 return client.setRPC({
                     type: 2, // Listening
                     details: track.title,
                     state: artistNames(track),
-                    name: track.title,
+                    name: "Zeta Music",
+                    statusDisplayType: 2, // Show the song title in Discord's compact status.
                     startTimestamp: Math.round(now - position * 1000),
                     ...(total > 0 ? { endTimestamp: Math.round(now + Math.max(0, total - position) * 1000) } : {}),
                     largeImageUrl: art,
                     largeImageKey: art,
                     smallImageText: "Zeta Music",
                     smallImageKey: "zeta",
+                    buttons: [
+                        { label: "Zeta Music GitHub", url: "https://github.com/zeta-zx/z3" },
+                        {
+                            label: "Play on YouTube Music",
+                            url: track.id.startsWith("yt:")
+                                ? `https://music.youtube.com/watch?v=${encodeURIComponent(track.id.slice(3))}`
+                                : `https://music.youtube.com/search?q=${encodeURIComponent([track.title, artistNames(track)].filter(Boolean).join(" "))}`,
+                        },
+                    ],
                 });
             })
             .catch(console.error);
@@ -495,8 +506,12 @@
 
     $effect(() => {
         void playerState.currentTrack;
+        void playerState.currentTrack?.title;
+        void playerState.currentTrack?.artists.map((artist) => artist.name).join("\u0000");
+        void playerState.currentTrack?.album?.title;
         void playerState.paused;
         void playerState.duration;
+        void settingsState.discordRpcEnabled;
         untrack(() => publishRPC());
     });
 

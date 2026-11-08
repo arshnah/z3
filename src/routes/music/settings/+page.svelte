@@ -99,6 +99,22 @@
                     onclick={() => settingsState.setPreferLocalSearchResults(!settingsState.preferLocalSearchResults)}
                 ></button>
             </div>
+            {#if !isAndroid}
+            <div class="row">
+                <div>
+                    <strong>Discord Rich Presence</strong>
+                    <p>Show the song and artist you’re playing in your Discord profile.</p>
+                </div>
+                <button
+                    class="switch"
+                    role="switch"
+                    aria-label="Discord Rich Presence"
+                    aria-checked={settingsState.discordRpcEnabled}
+                    disabled={settingsState.loading}
+                    onclick={() => settingsState.setDiscordRpcEnabled(!settingsState.discordRpcEnabled)}
+                ></button>
+            </div>
+            {/if}
         </div>
     </section>
 
