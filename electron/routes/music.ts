@@ -30,9 +30,10 @@ import { mintPoToken } from '../lib/potoken';
 import { MetadataStore, embedMp4Tags, readAudioTags, type IndexRecord } from '../lib/metadata';
 import { buildMuzzaBackup, parseMuzzaBackup, readMuzzaEventsFromDb, type MuzzaEvent } from '../lib/muzza';
 import { StatsStore } from '../lib/stats';
-import { lyricsfileToLrc } from '../lib/lyricsfile';
+import { comparableText, lyricsfileToLrc } from '../lib/lyricsfile';
 import { routes as scrobbling } from '../lib/scrobbling';
 import { musicText, youtubeArtistNames, youtubeArtists } from '../../src/lib/music-metadata';
+import { parseExportifyCsv } from '../../src/lib/playlist-import';
 import {
     fetchArtistAllSongs,
     fetchArtistDetails,
@@ -1778,6 +1779,124 @@ export const routes = {
 
         const playlistName = basename(source, extname(source)) || 'Imported playlist';
         const playlist = await routes.musicPlaylistCreate(playlistName);
+        await writePlaylist(playlist.id, songs, await readPlaylistMeta(playlist.id));
+        return { playlist: await readPlaylistFile(playlist.id), imported: songs.length, skipped };
+    },
+
+    /** Import Spotify playlist metadata exported as CSV by Exportify. */
+    async spotifyPlaylistImportFrom(filePath: string): Promise<{ playlist: Playlist; imported: number; skipped: number }> {
+        await init();
+        const source = resolve(filePath);
+        const tracks = parseExportifyCsv(readFileSync(source, 'utf8'));
+        if (!tracks.length) throw new Error('The Exportify CSV contains no tracks.');
+
+        const limit = 500;
+        const selected = tracks.slice(0, limit);
+        const downloaded = new Set((await metadata.all()).filter((record) => record.file).map((record) => record.id));
+        const songs: (Song | null)[] = new Array(selected.length).fill(null);
+        const matchCache = new Map<string, Song | null>();
+        let next = 0;
+        let skipped = Math.max(0, tracks.length - selected.length);
+
+        const resolveTrack = async (track: (typeof selected)[number]): Promise<Song | null> => {
+            const cacheKey = `${comparableText(track.title)}:${track.artists.map(comparableText).sort().join('|')}`;
+            if (matchCache.has(cacheKey)) return matchCache.get(cacheKey) ?? null;
+
+            const query = [track.title, track.artists.join(' '), track.album].filter(Boolean).join(' ');
+            const result = await yt.music.search(query, { type: 'song' });
+            const candidates = (result.songs?.contents ?? [])
+                .map((item: any) => ytToSong(item, downloaded))
+                .filter((song: Song | null): song is Song => song !== null)
+                .map((song: Song) => {
+                    const titleMatches = comparableText(song.title) === comparableText(track.title);
+                    const artistMatches = song.artists.some((artist) => {
+                        const candidate = comparableText(artist.name);
+                        return track.artists.some((name) => {
+                            const sourceArtist = comparableText(name);
+                            return candidate === sourceArtist || candidate.includes(sourceArtist) || sourceArtist.includes(candidate);
+                        });
+                    });
+                    if (!titleMatches || !artistMatches) return { song, score: -1 };
+
+                    const albumScore = track.album && comparableText(song.album?.title ?? '') === comparableText(track.album) ? 2 : 0;
+                    const durationScore = track.durationSeconds && song.duration
+                        ? Math.max(0, 1 - Math.abs(track.durationSeconds - song.duration) / Math.max(track.durationSeconds, song.duration))
+                        : 0;
+                    return { song, score: 10 + albumScore + durationScore };
+                })
+                .filter((candidate: { song: Song; score: number }) => candidate.score >= 10)
+                .sort((a: { score: number }, b: { score: number }) => b.score - a.score);
+            const match = candidates[0]?.song ?? null;
+            matchCache.set(cacheKey, match);
+            return match;
+        };
+
+        await Promise.all(Array.from({ length: Math.min(4, selected.length) }, async () => {
+            while (next < selected.length) {
+                const index = next++;
+                try {
+                    songs[index] = await resolveTrack(selected[index]);
+                    if (!songs[index]) skipped++;
+                } catch (error) {
+                    console.warn(`[Spotify playlist import] Could not match "${selected[index].title}":`, error);
+                    skipped++;
+                }
+            }
+        }));
+
+        const importedSongs = songs.filter((song): song is Song => song !== null);
+        if (!importedSongs.length) throw new Error('No Spotify tracks could be matched to playable YouTube Music songs.');
+
+        const playlistName = basename(source, extname(source)).trim() || 'Spotify playlist';
+        const playlist = await routes.musicPlaylistCreate(playlistName);
+        await writePlaylist(playlist.id, importedSongs, await readPlaylistMeta(playlist.id));
+        return { playlist: await readPlaylistFile(playlist.id), imported: importedSongs.length, skipped };
+    },
+
+    /** Import a public YouTube playlist into the local library. */
+    async youtubePlaylistImport(url: string): Promise<{ playlist: Playlist; imported: number; skipped: number }> {
+        await init();
+        let parsed: URL;
+        try {
+            parsed = new URL(url);
+        } catch {
+            throw new Error('Enter a valid YouTube playlist URL.');
+        }
+
+        const host = parsed.hostname.toLowerCase().replace(/^www\./, '');
+        if (!['youtube.com', 'music.youtube.com', 'm.youtube.com', 'youtu.be'].includes(host)) {
+            throw new Error('Only YouTube playlist links are supported.');
+        }
+        const playlistId = parsed.searchParams.get('list');
+        if (!playlistId || !/^[\w-]{10,}$/.test(playlistId)) {
+            throw new Error('The link does not contain a valid YouTube playlist ID.');
+        }
+
+        const playlistInfo = await yt.getPlaylist(playlistId);
+        const downloaded = new Set((await metadata.all()).filter((record) => record.file).map((record) => record.id));
+        const songs: Song[] = [];
+        let skipped = 0;
+        let processed = 0;
+        let page = playlistInfo;
+
+        while (processed < 500) {
+            for (const item of page.items) {
+                if (processed >= 500) break;
+                processed++;
+                const song = ytToSong(item, downloaded);
+                if (song) songs.push(song);
+                else skipped++;
+            }
+            if (processed >= 500 || !page.has_continuation) break;
+            page = await page.getContinuation();
+        }
+
+        const remaining = Number.parseInt(playlistInfo.info.total_items, 10);
+        if (Number.isFinite(remaining)) skipped += Math.max(0, remaining - processed);
+        if (!songs.length) throw new Error('No playable tracks were found in this YouTube playlist.');
+
+        const name = musicText(playlistInfo.info.title ?? '').trim() || 'YouTube playlist';
+        const playlist = await routes.musicPlaylistCreate(name);
         await writePlaylist(playlist.id, songs, await readPlaylistMeta(playlist.id));
         return { playlist: await readPlaylistFile(playlist.id), imported: songs.length, skipped };
     },

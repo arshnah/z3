@@ -216,7 +216,8 @@ export const androidClient: Routes = {
     async setDiscordRpcEnabled() { return false; },
     setMusicDir: unsupported, pickMusicDirectory: unsupported,
     muzzaExport: unsupported, muzzaImport: unsupported, muzzaExportTo: unsupported, muzzaImportFrom: unsupported,
-    m3uImport: unsupported, m3uImportFrom: unsupported,
+    m3uImport: unsupported, m3uImportFrom: unsupported, spotifyPlaylistImport: unsupported,
+    spotifyPlaylistImportFrom: unsupported, youtubePlaylistImport: unsupported,
     async statsRecordEvent(songId, playTimeMs, timestamp = Date.now(), name) {
         if (!songId || !Number.isFinite(playTimeMs) || playTimeMs < 1000) return;
         await storage.edit((state) => {

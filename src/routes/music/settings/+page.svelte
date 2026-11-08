@@ -21,6 +21,7 @@
     }
 
     let draft = $state("");
+    let youtubePlaylistUrl = $state("");
     let initialised = $state(false);
 
     $effect(() => {
@@ -196,6 +197,36 @@
                 <button class="btn" onclick={() => settingsState.importM3uPlaylist()} disabled={settingsState.busyM3u}>
                     {#if settingsState.busyM3u}<span class="spin"><Icon name="loader-circle" /></span>{:else}<Icon name="list-music" />{/if}
                     Import M3U playlist
+                </button>
+                <button
+                    class="btn"
+                    onclick={() => settingsState.importSpotifyPlaylist()}
+                    disabled={settingsState.busyOnlinePlaylist !== false}
+                >
+                    {#if settingsState.busyOnlinePlaylist === "spotify"}<span class="spin"><Icon name="loader-circle" /></span>{:else}<Icon name="list-music" />{/if}
+                    Import Spotify CSV
+                </button>
+            </div>
+            <p class="muted">
+                Export a playlist CSV from <a href="https://exportify.net/" target="_blank" rel="noreferrer">Exportify</a>.
+                Spotify tracks are matched to playable YouTube Music versions. You can also import a public YouTube playlist:
+            </p>
+            <div class="dir-row">
+                <input
+                    class="input"
+                    type="url"
+                    spellcheck="false"
+                    autocomplete="off"
+                    bind:value={youtubePlaylistUrl}
+                    placeholder="https://www.youtube.com/playlist?list=..."
+                />
+                <button
+                    class="btn"
+                    onclick={() => settingsState.importYoutubePlaylist(youtubePlaylistUrl)}
+                    disabled={!youtubePlaylistUrl.trim() || settingsState.busyOnlinePlaylist !== false}
+                >
+                    {#if settingsState.busyOnlinePlaylist === "youtube"}<span class="spin"><Icon name="loader-circle" /></span>{:else}<Icon name="list-music" />{/if}
+                    Import YouTube playlist
                 </button>
             </div>
             <div class="dir-row">

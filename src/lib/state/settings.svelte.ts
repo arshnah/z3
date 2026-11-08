@@ -138,6 +138,41 @@ class SettingsStore {
             this.busyM3u = false;
         }
     }
+
+    busyOnlinePlaylist = $state<false | "spotify" | "youtube">(false);
+
+    /** Import a Spotify CSV exported from Exportify. */
+    async importSpotifyPlaylist() {
+        if (this.busyOnlinePlaylist) return;
+        this.busyOnlinePlaylist = "spotify";
+        try {
+            const result = await client.spotifyPlaylistImport();
+            if (!result) return;
+            await libraryState.refresh();
+            const skipped = result.skipped ? ` (${result.skipped} tracks skipped)` : "";
+            toasts.success(`Imported ${result.imported} Spotify tracks as “${result.playlist.name}”${skipped}.`);
+        } catch (err) {
+            toasts.error(err);
+        } finally {
+            this.busyOnlinePlaylist = false;
+        }
+    }
+
+    /** Import a public YouTube playlist URL. */
+    async importYoutubePlaylist(url: string) {
+        if (this.busyOnlinePlaylist) return;
+        this.busyOnlinePlaylist = "youtube";
+        try {
+            const result = await client.youtubePlaylistImport(url);
+            await libraryState.refresh();
+            const skipped = result.skipped ? ` (${result.skipped} tracks skipped)` : "";
+            toasts.success(`Imported ${result.imported} YouTube tracks as “${result.playlist.name}”${skipped}.`);
+        } catch (err) {
+            toasts.error(err);
+        } finally {
+            this.busyOnlinePlaylist = false;
+        }
+    }
 }
 
 export const settingsState = new SettingsStore();

@@ -43,6 +43,8 @@ const MUSIC_ROUTES = [
     'muzzaExportTo',
     'muzzaImportFrom',
     'm3uImportFrom',
+    'spotifyPlaylistImportFrom',
+    'youtubePlaylistImport',
     'statsRecordEvent',
     'statsSummary',
 ] as const satisfies readonly (keyof Music)[];
@@ -117,6 +119,20 @@ const dialogs = {
         });
         if (picked.canceled || picked.filePaths.length === 0) return null;
         return music.m3uImportFrom(picked.filePaths[0]);
+    },
+
+    /** Import an Exportify Spotify playlist CSV. */
+    async spotifyPlaylistImport() {
+        const picked = await dialog.showOpenDialog(parentWindow(), {
+            title: 'Import Spotify playlist CSV',
+            properties: ['openFile'],
+            filters: [
+                { name: 'CSV files', extensions: ['csv'] },
+                { name: 'All files', extensions: ['*'] },
+            ],
+        });
+        if (picked.canceled || picked.filePaths.length === 0) return null;
+        return music.spotifyPlaylistImportFrom(picked.filePaths[0]);
     },
 };
 
