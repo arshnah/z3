@@ -84,14 +84,25 @@ test('one service failure stays queued while the other is delivered exactly once
 test('now-playing has no timestamp and cannot create a persistent listen', async () => {
     const calls = [];
     const app = fixture(connected(), async (url, options) => { calls.push({ url, options }); return Response.json({}); });
-    await app.service.nowPlaying(track);
+    await app.service.nowPlaying({
+        ...track,
+        title: '  A   Song ',
+        artists: [' An Artist ', 'Second Artist', 'an artist', ''],
+        album: ' An Album ',
+    });
     assert.equal(app.disk().queue.length, 0);
     const lastfm = new URLSearchParams(calls.find((c) => String(c.url).includes('audioscrobbler')).options.body);
     assert.equal(lastfm.get('method'), 'track.updateNowPlaying');
     assert.equal(lastfm.has('timestamp'), false);
+    assert.equal(lastfm.get('track'), 'A Song');
+    assert.equal(lastfm.get('artist'), 'An Artist, Second Artist');
+    assert.equal(lastfm.get('album'), 'An Album');
     const brainz = JSON.parse(calls.find((c) => String(c.url).includes('listenbrainz')).options.body);
     assert.equal(brainz.listen_type, 'playing_now');
     assert.equal('listened_at' in brainz.payload[0], false);
+    assert.equal(brainz.payload[0].track_metadata.artist_name, 'An Artist, Second Artist');
+    assert.deepEqual(brainz.payload[0].track_metadata.additional_info.artist_names, ['An Artist', 'Second Artist']);
+    assert.equal(brainz.payload[0].track_metadata.release_name, 'An Album');
 });
 
 test('authentication stores sessions privately and status omits tokens', async () => {

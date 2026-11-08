@@ -57,7 +57,9 @@ public class ZetaFilesPlugin extends Plugin {
                     Uri uri = data.getClipData() == null ? data.getData() : data.getClipData().getItemAt(i).getUri();
                     if (uri == null) continue;
                     String key = UUID.randomUUID().toString();
-                    String path = "zeta/audio/" + key;
+                    String name = displayName(uri);
+                    String mime = audioMimeType(uri, name);
+                    String path = "zeta/audio/" + key + audioExtension(name, mime);
                     File file = new File(getContext().getFilesDir(), path);
                     copied.add(file);
                     if (!file.getParentFile().isDirectory() && !file.getParentFile().mkdirs()) {
@@ -74,10 +76,9 @@ public class ZetaFilesPlugin extends Plugin {
                     try {
                         tags.setDataSource(file.getAbsolutePath());
                         String title = tags.extractMetadata(MediaMetadataRetriever.METADATA_KEY_TITLE);
-                        if (title == null || title.trim().isEmpty()) title = displayName(uri);
+                        if (title == null || title.trim().isEmpty()) title = name;
                         String artist = tags.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ARTIST);
                         String duration = tags.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION);
-                        String mime = tags.extractMetadata(MediaMetadataRetriever.METADATA_KEY_MIMETYPE);
                         JSObject song = new JSObject();
                         song.put("id", "local:" + key);
                         song.put("title", title);
@@ -106,7 +107,7 @@ public class ZetaFilesPlugin extends Plugin {
                         JSObject stored = new JSObject();
                         stored.put("song", song);
                         stored.put("file", path);
-                        stored.put("mimetype", mime == null ? "audio/mpeg" : mime);
+                        stored.put("mimetype", mime);
                         songs.put(stored);
                     } finally { tags.release(); }
                 }
@@ -126,5 +127,42 @@ public class ZetaFilesPlugin extends Plugin {
             if (cursor != null && cursor.moveToFirst()) return cursor.getString(0);
         }
         return "Imported song";
+    }
+
+    private String audioExtension(String name, String mime) {
+        int dot = name.lastIndexOf('.');
+        if (dot >= 0) {
+            String extension = name.substring(dot).toLowerCase(java.util.Locale.ROOT);
+            if (java.util.Arrays.asList(".m4a", ".mp4", ".mp3", ".flac", ".ogg", ".opus", ".wav", ".aac", ".webm", ".3gp").contains(extension)) {
+                return extension;
+            }
+        }
+        if ("audio/flac".equals(mime) || "audio/x-flac".equals(mime)) return ".flac";
+        if ("audio/mpeg".equals(mime)) return ".mp3";
+        if ("audio/wav".equals(mime) || "audio/x-wav".equals(mime)) return ".wav";
+        if ("audio/ogg".equals(mime)) return ".ogg";
+        if ("audio/mp4".equals(mime)) return ".m4a";
+        if ("audio/aac".equals(mime)) return ".aac";
+        if ("audio/webm".equals(mime)) return ".webm";
+        return "";
+    }
+
+    private String audioMimeType(Uri uri, String name) {
+        String mime = getContext().getContentResolver().getType(uri);
+        if ("audio/x-flac".equalsIgnoreCase(mime)) return "audio/flac";
+        if (mime != null && mime.startsWith("audio/") && !"audio/*".equals(mime)) return mime;
+
+        int dot = name.lastIndexOf('.');
+        String extension = dot >= 0 ? name.substring(dot).toLowerCase(java.util.Locale.ROOT) : "";
+        switch (extension) {
+            case ".flac": return "audio/flac";
+            case ".mp3": return "audio/mpeg";
+            case ".wav": return "audio/wav";
+            case ".ogg":
+            case ".opus": return "audio/ogg";
+            case ".webm": return "audio/webm";
+            case ".aac": return "audio/aac";
+            default: return "audio/mp4";
+        }
     }
 }

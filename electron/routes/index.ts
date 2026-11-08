@@ -39,8 +39,12 @@ const MUSIC_ROUTES = [
     'fetchImage',
     'getSettings',
     'setMusicDir',
+    'setDiscordRpcEnabled',
     'muzzaExportTo',
     'muzzaImportFrom',
+    'm3uImportFrom',
+    'spotifyPlaylistImportFrom',
+    'youtubePlaylistImport',
     'statsRecordEvent',
     'statsSummary',
 ] as const satisfies readonly (keyof Music)[];
@@ -101,6 +105,34 @@ const dialogs = {
         });
         if (picked.canceled || picked.filePaths.length === 0) return null;
         return music.muzzaImportFrom(picked.filePaths[0]);
+    },
+
+    /** Import a local `.m3u` or `.m3u8` playlist. */
+    async m3uImport() {
+        const picked = await dialog.showOpenDialog(parentWindow(), {
+            title: 'Import playlist',
+            properties: ['openFile'],
+            filters: [
+                { name: 'M3U playlists', extensions: ['m3u', 'm3u8'] },
+                { name: 'All files', extensions: ['*'] },
+            ],
+        });
+        if (picked.canceled || picked.filePaths.length === 0) return null;
+        return music.m3uImportFrom(picked.filePaths[0]);
+    },
+
+    /** Import an Exportify Spotify playlist CSV. */
+    async spotifyPlaylistImport() {
+        const picked = await dialog.showOpenDialog(parentWindow(), {
+            title: 'Import Spotify playlist CSV',
+            properties: ['openFile'],
+            filters: [
+                { name: 'CSV files', extensions: ['csv'] },
+                { name: 'All files', extensions: ['*'] },
+            ],
+        });
+        if (picked.canceled || picked.filePaths.length === 0) return null;
+        return music.spotifyPlaylistImportFrom(picked.filePaths[0]);
     },
 };
 
@@ -168,9 +200,56 @@ const windowChrome = {
 
 /* ------------------------------- Discord RPC ------------------------------ */
 
-const rpc = new Client({ clientId: '1499408750526595152' });
+let rpc: Client;
+let rpcActivity: SetActivity | null = null;
+let rpcLoginPromise: Promise<void> | null = null;
+let rpcRetryTimer: ReturnType<typeof setTimeout> | null = null;
 
-rpc.login().catch(err => console.warn("Discord RPC failed to connect (is Discord running?):", err));
+function scheduleRPCReconnect() {
+    if (rpcRetryTimer) return;
+    rpcRetryTimer = setTimeout(() => {
+        rpcRetryTimer = null;
+        void connectRPC();
+    }, 10_000);
+    rpcRetryTimer.unref?.();
+}
+
+function createRPCClient(): Client {
+    const client = new Client({ clientId: '1499408750526595152' });
+    client.on('ready', () => {
+        if (client !== rpc || !rpcActivity) return;
+        client.user?.setActivity(rpcActivity).catch((err) => console.warn('[discord-rpc] Failed to restore activity:', err));
+    });
+    client.on('disconnected', () => {
+        if (client !== rpc) return;
+        rpc = createRPCClient();
+        scheduleRPCReconnect();
+    });
+    return client;
+}
+
+async function connectRPC(): Promise<void> {
+    if (rpcRetryTimer) {
+        clearTimeout(rpcRetryTimer);
+        rpcRetryTimer = null;
+    }
+    if (rpc.isConnected) return;
+    if (rpcLoginPromise) return rpcLoginPromise;
+
+    const client = rpc;
+    rpcLoginPromise = client.login().catch((err) => {
+        if (client !== rpc) return;
+        console.warn('[discord-rpc] Failed to connect, retrying:', err);
+        rpc = createRPCClient();
+        scheduleRPCReconnect();
+    }).finally(() => {
+        rpcLoginPromise = null;
+    });
+    return rpcLoginPromise;
+}
+
+rpc = createRPCClient();
+void connectRPC();
 
 /**
  * Discord's servers fetch rich-presence artwork themselves, so only a public
@@ -183,6 +262,11 @@ rpc.login().catch(err => console.warn("Discord RPC failed to connect (is Discord
  */
 const ytArtCache = new Map<string, string>();
 const YT_VARIANTS = ['maxresdefault', 'hq720', 'mqdefault'] as const;
+const appleArtCache = new Map<string, string>();
+
+function artworkMatchText(value: string): string {
+    return value.normalize('NFKD').replace(/\p{Diacritic}/gu, '').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
+}
 
 async function youtubeArtwork(videoId: string): Promise<string> {
     const cached = ytArtCache.get(videoId);
@@ -203,6 +287,45 @@ async function youtubeArtwork(videoId: string): Promise<string> {
     return '';
 }
 
+async function appleMusicArtwork(title: string, artists: string[], album?: string): Promise<string> {
+    const query = [title, ...artists, album].filter(Boolean).join(' ').trim();
+    if (!title.trim() || !artists.some((artist) => artist.trim())) return '';
+    const cacheKey = artworkMatchText(query);
+    const cached = appleArtCache.get(cacheKey);
+    if (cached !== undefined) return cached;
+
+    const url = new URL('https://itunes.apple.com/search');
+    url.search = new URLSearchParams({ term: query, entity: 'song', limit: '15' }).toString();
+    const response = await fetch(url, { signal: AbortSignal.timeout(8000) });
+    if (!response.ok) throw new Error(`Apple Music artwork search returned ${response.status}.`);
+    const result = await response.json();
+    const wantedTitle = artworkMatchText(title);
+    const wantedArtists = artists.map(artworkMatchText).filter(Boolean);
+    const wantedAlbum = artworkMatchText(album ?? '');
+    const matches = (result.results ?? [])
+        .map((item: { trackName?: string; artistName?: string; collectionName?: string; artworkUrl100?: string }) => {
+            const candidateTitle = artworkMatchText(item.trackName ?? '');
+            const candidateArtist = artworkMatchText(item.artistName ?? '');
+            const candidateAlbum = artworkMatchText(item.collectionName ?? '');
+            if (!candidateTitle || !candidateArtist) return { score: 0, artwork: '' };
+            const titleMatches = candidateTitle === wantedTitle || candidateTitle.startsWith(`${wantedTitle} `) || wantedTitle.startsWith(`${candidateTitle} `);
+            const artistMatches = wantedArtists.some((artist) => candidateArtist === artist || candidateArtist.includes(artist) || artist.includes(candidateArtist));
+            if (!titleMatches || !artistMatches) return { score: 0, artwork: '' };
+            const score =
+                (candidateTitle === wantedTitle ? 4 : 2) +
+                (wantedAlbum && candidateAlbum === wantedAlbum ? 2 : 0) +
+                (wantedAlbum && candidateAlbum && candidateAlbum !== wantedAlbum ? -1 : 0);
+            return { score, artwork: item.artworkUrl100 ?? '' };
+        })
+        .filter((match: { score: number; artwork: string }) => match.score > 0 && match.artwork)
+        .sort((a: { score: number }, b: { score: number }) => b.score - a.score);
+
+    const artwork = matches[0]?.artwork.replace(/\d+x\d+bb(?=\.)/, '1200x1200bb') ?? '';
+    if (appleArtCache.size > 500) appleArtCache.delete(appleArtCache.keys().next().value as string);
+    appleArtCache.set(cacheKey, artwork);
+    return artwork;
+}
+
 export const routes = {
     async openScrobblingLink(url: string): Promise<void> {
         const target = new URL(url);
@@ -212,18 +335,30 @@ export const routes = {
     },
     ...windowChrome,
     async clearRPC() {
+        rpcActivity = null;
         if (!rpc.user) return;
         await rpc.user.clearActivity();
     },
-    /** The best public image for a track: a remote thumbnail if it has one, else its YouTube artwork. */
-    async rpcArtwork(trackId: string, urls: string[]): Promise<string> {
+    /** A public image URL for Discord, using Apple Music lookup only for local tracks. */
+    async rpcArtwork(trackId: string, urls: string[], title: string, artists: string[], album?: string): Promise<string> {
         const remote = urls.find((url) => /^https?:\/\//i.test(url));
         if (remote) return remote;
         if (trackId.startsWith('yt:')) return youtubeArtwork(trackId.slice(3));
+        if (trackId.startsWith('local:') || trackId.startsWith('fs:')) {
+            try {
+                return await appleMusicArtwork(title, artists, album);
+            } catch (err) {
+                console.warn('[discord-rpc] Apple Music artwork lookup failed:', err);
+            }
+        }
         return '';
     },
     async setRPC(activity: SetActivity): Promise<SetActivityResponse | null> {
-        if (!rpc.user) return null;
+        rpcActivity = activity;
+        if (!rpc.user) {
+            void connectRPC();
+            return null;
+        }
         return await rpc.user.setActivity(activity);
     },
     ...music,

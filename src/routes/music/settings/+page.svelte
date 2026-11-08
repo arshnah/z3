@@ -21,6 +21,7 @@
     }
 
     let draft = $state("");
+    let youtubePlaylistUrl = $state("");
     let initialised = $state(false);
 
     $effect(() => {
@@ -86,6 +87,35 @@
                 </div>
                 <button class="switch" role="switch" aria-label="Autoplay" aria-checked={playerState.autoplay} onclick={() => setAutoplay(!playerState.autoplay)}></button>
             </div>
+            <div class="row">
+                <div>
+                    <strong>Prefer local search results</strong>
+                    <p>Play a matching song from your downloaded library when you select a search result.</p>
+                </div>
+                <button
+                    class="switch"
+                    role="switch"
+                    aria-label="Prefer local search results"
+                    aria-checked={settingsState.preferLocalSearchResults}
+                    onclick={() => settingsState.setPreferLocalSearchResults(!settingsState.preferLocalSearchResults)}
+                ></button>
+            </div>
+            {#if !isAndroid}
+            <div class="row">
+                <div>
+                    <strong>Discord Rich Presence</strong>
+                    <p>Show the song and artist you’re playing in your Discord profile.</p>
+                </div>
+                <button
+                    class="switch"
+                    role="switch"
+                    aria-label="Discord Rich Presence"
+                    aria-checked={settingsState.discordRpcEnabled}
+                    disabled={settingsState.loading}
+                    onclick={() => settingsState.setDiscordRpcEnabled(!settingsState.discordRpcEnabled)}
+                ></button>
+            </div>
+            {/if}
         </div>
     </section>
 
@@ -162,6 +192,43 @@
                 any player can open. Local folders and remote storage are supported:
                 <code>sftp://user:pass@host:port/path</code>, <code>ftp://…</code> or <code>ftps://…</code>.
             </p>
+            <p class="muted">Import an <code>.m3u</code> or <code>.m3u8</code> playlist. Referenced local audio is copied into this music folder when it is not already there.</p>
+            <div class="btn-row">
+                <button class="btn" onclick={() => settingsState.importM3uPlaylist()} disabled={settingsState.busyM3u}>
+                    {#if settingsState.busyM3u}<span class="spin"><Icon name="loader-circle" /></span>{:else}<Icon name="list-music" />{/if}
+                    Import M3U playlist
+                </button>
+                <button
+                    class="btn"
+                    onclick={() => settingsState.importSpotifyPlaylist()}
+                    disabled={settingsState.busyOnlinePlaylist !== false}
+                >
+                    {#if settingsState.busyOnlinePlaylist === "spotify"}<span class="spin"><Icon name="loader-circle" /></span>{:else}<Icon name="list-music" />{/if}
+                    Import Spotify CSV
+                </button>
+            </div>
+            <p class="muted">
+                Export a playlist CSV from <a href="https://exportify.net/" target="_blank" rel="noreferrer">Exportify</a>.
+                Spotify tracks are matched to playable YouTube Music versions. You can also import a public YouTube playlist:
+            </p>
+            <div class="dir-row">
+                <input
+                    class="input"
+                    type="url"
+                    spellcheck="false"
+                    autocomplete="off"
+                    bind:value={youtubePlaylistUrl}
+                    placeholder="https://www.youtube.com/playlist?list=..."
+                />
+                <button
+                    class="btn"
+                    onclick={() => settingsState.importYoutubePlaylist(youtubePlaylistUrl)}
+                    disabled={!youtubePlaylistUrl.trim() || settingsState.busyOnlinePlaylist !== false}
+                >
+                    {#if settingsState.busyOnlinePlaylist === "youtube"}<span class="spin"><Icon name="loader-circle" /></span>{:else}<Icon name="list-music" />{/if}
+                    Import YouTube playlist
+                </button>
+            </div>
             <div class="dir-row">
                 <input
                     class="input"

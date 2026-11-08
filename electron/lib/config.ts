@@ -16,10 +16,12 @@ export interface AppConfig {
      * (`sftp://` / `ftp://` / `ftps://` / `file://`).
      */
     musicDir: string;
+    discordRpcEnabled: boolean;
 }
 
 const defaults: AppConfig = {
     musicDir: DEFAULT_MUSIC_DIR,
+    discordRpcEnabled: true,
 };
 
 /**

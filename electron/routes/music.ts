@@ -1,9 +1,12 @@
 import { Innertube, Parser, Platform, type Types } from 'youtubei.js';
 import { Song as Saavn } from '@saavn-labs/sdk';
 
-import { readFileSync, writeFileSync } from 'node:fs';
+import { copyFileSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { execFile } from 'node:child_process';
+import { basename, dirname, extname, isAbsolute, relative, resolve, sep } from 'node:path';
 import { promisify } from 'node:util';
+import { fileURLToPath } from 'node:url';
 
 const execFileAsync = promisify(execFile);
 
@@ -27,9 +30,10 @@ import { mintPoToken } from '../lib/potoken';
 import { MetadataStore, embedMp4Tags, readAudioTags, type IndexRecord } from '../lib/metadata';
 import { buildMuzzaBackup, parseMuzzaBackup, readMuzzaEventsFromDb, type MuzzaEvent } from '../lib/muzza';
 import { StatsStore } from '../lib/stats';
-import { lyricsfileToLrc } from '../lib/lyricsfile';
+import { comparableText, lyricsfileToLrc } from '../lib/lyricsfile';
 import { routes as scrobbling } from '../lib/scrobbling';
 import { musicText, youtubeArtistNames, youtubeArtists } from '../../src/lib/music-metadata';
+import { parseExportifyCsv } from '../../src/lib/playlist-import';
 import {
     fetchArtistAllSongs,
     fetchArtistDetails,
@@ -184,9 +188,21 @@ const YT_STREAM_CHUNK = 5 * 1024 * 1024;
  * requests. Returns a WHATWG `ReadableStream` so callers can treat it exactly
  * like the stream `yt.download()` used to hand back.
  */
-function streamRangedUrl(url: string, contentLength: number): ReadableStream<Uint8Array> {
-    let position = 0;
+async function streamRangedUrl(url: string, contentLength: number): Promise<ReadableStream<Uint8Array>> {
+    const firstEnd = Math.min(YT_STREAM_CHUNK - 1, contentLength - 1);
+    const firstResponse = await fetch(`${url}&range=0-${firstEnd}`);
+    if (!firstResponse.ok) {
+        throw new Error(`YouTube stream returned ${firstResponse.status} for range 0-${firstEnd}`);
+    }
+    const firstChunk = new Uint8Array(await firstResponse.arrayBuffer());
+    if (!firstChunk.length) throw new Error('YouTube returned an empty audio stream.');
+
+    let position = firstChunk.length;
     return new ReadableStream<Uint8Array>({
+        start(controller) {
+            controller.enqueue(firstChunk);
+            if (position >= contentLength) controller.close();
+        },
         async pull(controller) {
             if (position >= contentLength) {
                 controller.close();
@@ -247,6 +263,7 @@ async function downloadYtAudio(videoId: string): Promise<ReadableStream<Uint8Arr
         for (const opts of formatAttempts) {
             try {
                 const format = info.chooseFormat(opts as any);
+                if (!format.url && !format.signature_cipher && !format.cipher) continue;
                 const url = `${await format.decipher(yt.session.player)}&pot=${pot}`;
                 const contentLength = Number(format.content_length) || 0;
                 if (!contentLength) {
@@ -255,13 +272,13 @@ async function downloadYtAudio(videoId: string): Promise<ReadableStream<Uint8Arr
                     if (!res.ok || !res.body) throw new Error(`YouTube stream returned ${res.status}`);
                     return res.body;
                 }
-                return streamRangedUrl(url, contentLength);
+                return await streamRangedUrl(url, contentLength);
             } catch (err: any) {
                 lastErr = err;
             }
         }
     }
-    throw lastErr ?? new Error(`Could not resolve a playable audio format for ${videoId}`);
+    throw lastErr ?? new Error(`YouTube did not provide a decipherable audio format for ${videoId}`);
 }
 
 async function webStreamToBuffer(stream: ReadableStream<Uint8Array>): Promise<Buffer> {
@@ -637,41 +654,50 @@ function needsMetadataRepair(record: IndexRecord): boolean {
     return /\[(yt|js)_[^\]]+\]\s*$/i.test(record.title) || record.artists[0]?.name === 'Unknown Artist' || !record.thumbnails.length;
 }
 
-/**
- * One-time (idempotent) migration: index any audio files sitting in the music
- * directory that aren't in `.zeta/index.json` yet — e.g. `.mp3`s downloaded
- * before the MP4 rewrite. Reads their tags and restores canonical ids so they
- * become first-class, de-duplicated, round-trippable library entries.
- */
-async function migrateLegacyFiles(): Promise<void> {
-    if (!vfs.isLocal) return; // needs random-access tag reads
+/** List supported audio files recursively, keeping paths relative to the music folder. */
+async function listAudioFiles(): Promise<string[]> {
+    const files: string[] = [];
+    const pending = [''];
 
-    let entries;
-    try {
-        entries = await vfs.readdir('');
-    } catch {
-        return;
+    while (pending.length) {
+        const directory = pending.pop()!;
+        for (const entry of await vfs.readdir(directory)) {
+            const path = directory ? `${directory}/${entry.name}` : entry.name;
+            if (entry.isDirectory) {
+                if (path !== '.zeta') pending.push(path);
+            } else if (entry.isFile && isAudioFile(entry.name)) {
+                files.push(path);
+            }
+        }
     }
 
+    return files.sort((a, b) => a.localeCompare(b));
+}
+
+/**
+ * Index audio files in the music folder (including subfolders) that aren't in
+ * the metadata index yet, so local files become playable library tracks.
+ */
+async function migrateLegacyFiles(files: string[]): Promise<void> {
     const all = await metadata.all();
     const indexedFiles = new Set(all.map((r) => r.file).filter((f): f is string => !!f));
     const indexedIds = new Set(all.map((r) => r.id));
 
     const records: IndexRecord[] = [];
-    for (const entry of entries) {
-        if (!entry.isFile || !isAudioFile(entry.name)) continue;
-        if (indexedFiles.has(entry.name)) continue;
+    for (const file of files) {
+        if (indexedFiles.has(file)) continue;
 
-        const id = parseLegacyId(entry.name) ?? `local:${entry.name}`;
+        const id = parseLegacyId(file) ?? `local:${file}`;
         if (indexedIds.has(id)) continue;
 
-        const local = vfs.localPath(entry.name);
+        const local = vfs.isLocal ? vfs.localPath(file) : null;
         const tags = local ? await readAudioTags(local) : null;
-        const fromName = parseLegacyName(entry.name);
+        const basename = file.slice(file.lastIndexOf('/') + 1);
+        const fromName = parseLegacyName(basename);
 
         records.push({
             id,
-            file: entry.name,
+            file,
             title: tags?.title || fromName.title,
             artists: tags?.artists?.length
                 ? tags.artists
@@ -1141,9 +1167,10 @@ export const routes = {
 
         await ensureFavourites();
 
-        // Pull any pre-rewrite (e.g. .mp3) files into the index so they behave
-        // like first-class library entries.
-        await migrateLegacyFiles().catch((err) => console.error('[migrate] failed:', err));
+        // Index files recursively so local audio in organized subfolders is
+        // available just like files at the music-folder root.
+        const audioFiles = await listAudioFiles();
+        await migrateLegacyFiles(audioFiles);
 
         const entries = await vfs.readdir('');
         const playlists: Playlist[] = [];
@@ -1156,6 +1183,20 @@ export const routes = {
                     console.error(`[library] Failed to read playlist ${entry.name}:`, err);
                 }
             }
+        }
+
+        const audioFileSet = new Set(audioFiles);
+        const localTracks = (await metadata.all())
+            .filter((record) => record.id.startsWith('local:') && record.file && audioFileSet.has(record.file))
+            .map((record) => MetadataStore.toSong(record));
+        if (localTracks.length) {
+            playlists.push({
+                id: 'music-folder',
+                name: 'Music Folder',
+                tracks: localTracks,
+                createdAt: 0,
+                isProtected: true,
+            });
         }
 
         // Stable order: Favourites first, then oldest → newest.
@@ -1488,9 +1529,14 @@ export const routes = {
 
     /* ------------------------------ settings ------------------------------ */
 
-    async getSettings(): Promise<{ musicDir: string; isRemote: boolean }> {
-        const { musicDir } = getConfig();
-        return { musicDir, isRemote: /^(sftp|ftp|ftps):\/\//i.test(musicDir) };
+    async getSettings(): Promise<{ musicDir: string; isRemote: boolean; discordRpcEnabled: boolean }> {
+        const { musicDir, discordRpcEnabled } = getConfig();
+        return { musicDir, isRemote: /^(sftp|ftp|ftps):\/\//i.test(musicDir), discordRpcEnabled };
+    },
+
+    async setDiscordRpcEnabled(enabled: boolean): Promise<boolean> {
+        if (typeof enabled !== 'boolean') throw new Error('Invalid Discord Rich Presence setting.');
+        return saveConfig({ discordRpcEnabled: enabled }).discordRpcEnabled;
     },
 
     /** Switch the music directory. Validates connectivity, then reloads. */
@@ -1638,6 +1684,221 @@ export const routes = {
             liked: imported.likedIds.length,
         });
         return { songs: toAdd.length, playlists: imported.playlists.length, liked: imported.likedIds.length };
+    },
+
+    /** Import a local M3U playlist, copying referenced files into managed storage when needed. */
+    async m3uImportFrom(filePath: string): Promise<{ playlist: Playlist; imported: number; skipped: number }> {
+        await ensureStorage();
+        const source = resolve(filePath);
+        const content = readFileSync(source, 'utf8').replace(/^\uFEFF/, '');
+        const lines = content.split(/\r?\n/);
+        const root = vfs.isLocal ? resolve(vfs.root) : null;
+        const songs: Song[] = [];
+        const seen = new Set<string>();
+        let extinf: string | null = null;
+        let skipped = 0;
+
+        for (const rawLine of lines) {
+            const line = rawLine.trim();
+            if (!line) continue;
+            if (line.startsWith('#EXTINF:')) {
+                extinf = line.slice('#EXTINF:'.length).split(',').slice(1).join(',').trim() || null;
+                continue;
+            }
+            if (line.startsWith('#')) continue;
+            const fallback = extinf;
+            extinf = null;
+
+            try {
+                let audioPath: string;
+                if (/^https?:\/\//i.test(line)) {
+                    skipped++;
+                    continue;
+                } else if (/^file:/i.test(line)) {
+                    audioPath = fileURLToPath(line);
+                } else if (isAbsolute(line)) {
+                    audioPath = line;
+                } else {
+                    audioPath = resolve(dirname(source), line);
+                }
+
+                if (!isAudioFile(audioPath) || !statSync(audioPath).isFile()) {
+                    skipped++;
+                    continue;
+                }
+
+                let libraryPath: string;
+                const inLibrary = root ? relative(root, audioPath) : '..';
+                if (root && inLibrary !== '..' && !inLibrary.startsWith(`..${sep}`) && !isAbsolute(inLibrary)) {
+                    libraryPath = inLibrary.split(sep).join('/');
+                } else {
+                    const originalName = basename(audioPath);
+                    const fileHash = createHash('sha256').update(audioPath.toLowerCase()).digest('hex').slice(0, 16);
+                    libraryPath = `.zeta/imports/${fileHash}/${originalName}`;
+                    if (!(await vfs.exists(libraryPath))) {
+                        await vfs.mkdir(dirname(libraryPath).split(sep).join('/'));
+                        const destination = vfs.localPath(libraryPath);
+                        if (destination) copyFileSync(audioPath, destination);
+                        else await vfs.writeFile(libraryPath, readFileSync(audioPath));
+                    }
+                }
+
+                let record = await metadata.getByFile(libraryPath);
+                if (!record) {
+                    const local = vfs.localPath(libraryPath);
+                    const tags = local ? await readAudioTags(local) : null;
+                    const fallbackParts = fallback?.match(/^(.*?)\s+-\s+(.*)$/);
+                    record = {
+                        id: `local:${libraryPath}`,
+                        file: libraryPath,
+                        title: tags?.title || fallbackParts?.[2] || basename(audioPath, extname(audioPath)),
+                        artists: tags?.artists?.length
+                            ? tags.artists
+                            : [{ name: fallbackParts?.[1] || 'Unknown Artist', thumbnails: [] }],
+                        album: tags?.album ?? null,
+                        duration: tags?.duration ?? 0,
+                        year: tags?.year,
+                        lyrics: tags?.lyrics ?? null,
+                        thumbnails: tags?.thumbnails ?? [],
+                    };
+                    await metadata.upsert(record);
+                }
+
+                const song = MetadataStore.toSong(record);
+                if (!seen.has(song.id)) {
+                    songs.push(song);
+                    seen.add(song.id);
+                }
+            } catch (error) {
+                console.warn(`[playlist import] Skipped entry "${line}":`, error);
+                skipped++;
+            }
+        }
+
+        if (!songs.length) throw new Error('No playable local audio files were found in this playlist.');
+
+        const playlistName = basename(source, extname(source)) || 'Imported playlist';
+        const playlist = await routes.musicPlaylistCreate(playlistName);
+        await writePlaylist(playlist.id, songs, await readPlaylistMeta(playlist.id));
+        return { playlist: await readPlaylistFile(playlist.id), imported: songs.length, skipped };
+    },
+
+    /** Import Spotify playlist metadata exported as CSV by Exportify. */
+    async spotifyPlaylistImportFrom(filePath: string): Promise<{ playlist: Playlist; imported: number; skipped: number }> {
+        await init();
+        const source = resolve(filePath);
+        const tracks = parseExportifyCsv(readFileSync(source, 'utf8'));
+        if (!tracks.length) throw new Error('The Exportify CSV contains no tracks.');
+
+        const limit = 500;
+        const selected = tracks.slice(0, limit);
+        const downloaded = new Set((await metadata.all()).filter((record) => record.file).map((record) => record.id));
+        const songs: (Song | null)[] = new Array(selected.length).fill(null);
+        const matchCache = new Map<string, Song | null>();
+        let next = 0;
+        let skipped = Math.max(0, tracks.length - selected.length);
+
+        const resolveTrack = async (track: (typeof selected)[number]): Promise<Song | null> => {
+            const cacheKey = `${comparableText(track.title)}:${track.artists.map(comparableText).sort().join('|')}`;
+            if (matchCache.has(cacheKey)) return matchCache.get(cacheKey) ?? null;
+
+            const query = [track.title, track.artists.join(' '), track.album].filter(Boolean).join(' ');
+            const result = await yt.music.search(query, { type: 'song' });
+            const candidates = (result.songs?.contents ?? [])
+                .map((item: any) => ytToSong(item, downloaded))
+                .filter((song: Song | null): song is Song => song !== null)
+                .map((song: Song) => {
+                    const titleMatches = comparableText(song.title) === comparableText(track.title);
+                    const artistMatches = song.artists.some((artist) => {
+                        const candidate = comparableText(artist.name);
+                        return track.artists.some((name) => {
+                            const sourceArtist = comparableText(name);
+                            return candidate === sourceArtist || candidate.includes(sourceArtist) || sourceArtist.includes(candidate);
+                        });
+                    });
+                    if (!titleMatches || !artistMatches) return { song, score: -1 };
+
+                    const albumScore = track.album && comparableText(song.album?.title ?? '') === comparableText(track.album) ? 2 : 0;
+                    const durationScore = track.durationSeconds && song.duration
+                        ? Math.max(0, 1 - Math.abs(track.durationSeconds - song.duration) / Math.max(track.durationSeconds, song.duration))
+                        : 0;
+                    return { song, score: 10 + albumScore + durationScore };
+                })
+                .filter((candidate: { song: Song; score: number }) => candidate.score >= 10)
+                .sort((a: { score: number }, b: { score: number }) => b.score - a.score);
+            const match = candidates[0]?.song ?? null;
+            matchCache.set(cacheKey, match);
+            return match;
+        };
+
+        await Promise.all(Array.from({ length: Math.min(4, selected.length) }, async () => {
+            while (next < selected.length) {
+                const index = next++;
+                try {
+                    songs[index] = await resolveTrack(selected[index]);
+                    if (!songs[index]) skipped++;
+                } catch (error) {
+                    console.warn(`[Spotify playlist import] Could not match "${selected[index].title}":`, error);
+                    skipped++;
+                }
+            }
+        }));
+
+        const importedSongs = songs.filter((song): song is Song => song !== null);
+        if (!importedSongs.length) throw new Error('No Spotify tracks could be matched to playable YouTube Music songs.');
+
+        const playlistName = basename(source, extname(source)).trim() || 'Spotify playlist';
+        const playlist = await routes.musicPlaylistCreate(playlistName);
+        await writePlaylist(playlist.id, importedSongs, await readPlaylistMeta(playlist.id));
+        return { playlist: await readPlaylistFile(playlist.id), imported: importedSongs.length, skipped };
+    },
+
+    /** Import a public YouTube playlist into the local library. */
+    async youtubePlaylistImport(url: string): Promise<{ playlist: Playlist; imported: number; skipped: number }> {
+        await init();
+        let parsed: URL;
+        try {
+            parsed = new URL(url);
+        } catch {
+            throw new Error('Enter a valid YouTube playlist URL.');
+        }
+
+        const host = parsed.hostname.toLowerCase().replace(/^www\./, '');
+        if (!['youtube.com', 'music.youtube.com', 'm.youtube.com', 'youtu.be'].includes(host)) {
+            throw new Error('Only YouTube playlist links are supported.');
+        }
+        const playlistId = parsed.searchParams.get('list');
+        if (!playlistId || !/^[\w-]{10,}$/.test(playlistId)) {
+            throw new Error('The link does not contain a valid YouTube playlist ID.');
+        }
+
+        const playlistInfo = await yt.getPlaylist(playlistId);
+        const downloaded = new Set((await metadata.all()).filter((record) => record.file).map((record) => record.id));
+        const songs: Song[] = [];
+        let skipped = 0;
+        let processed = 0;
+        let page = playlistInfo;
+
+        while (processed < 500) {
+            for (const item of page.items) {
+                if (processed >= 500) break;
+                processed++;
+                const song = ytToSong(item, downloaded);
+                if (song) songs.push(song);
+                else skipped++;
+            }
+            if (processed >= 500 || !page.has_continuation) break;
+            page = await page.getContinuation();
+        }
+
+        const remaining = Number.parseInt(playlistInfo.info.total_items, 10);
+        if (Number.isFinite(remaining)) skipped += Math.max(0, remaining - processed);
+        if (!songs.length) throw new Error('No playable tracks were found in this YouTube playlist.');
+
+        const name = musicText(playlistInfo.info.title ?? '').trim() || 'YouTube playlist';
+        const playlist = await routes.musicPlaylistCreate(name);
+        await writePlaylist(playlist.id, songs, await readPlaylistMeta(playlist.id));
+        return { playlist: await readPlaylistFile(playlist.id), imported: songs.length, skipped };
     },
 
     /* ------------------------------- stats -------------------------------- */

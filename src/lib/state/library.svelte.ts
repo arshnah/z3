@@ -3,6 +3,7 @@ import { client } from "$lib/ephaptic";
 import type { Playlist, Song } from "$lib/schema";
 import { toasts } from "$lib/state/toast.svelte";
 import { isAndroid } from '$lib/platform';
+import { findLocalTrackMatch } from '$lib/local-track-match';
 
 export const FAVOURITES_ID = "favourites.m3u8";
 
@@ -103,6 +104,10 @@ class LibraryStore {
 
     getPlaylist(id: string): Playlist | undefined {
         return this.byId.get(id);
+    }
+
+    findLocalTrack(song: Song): Song | undefined {
+        return findLocalTrackMatch(song, this.tracks.values());
     }
 
     isInPlaylist(playlistId: string, trackId: string): boolean {
