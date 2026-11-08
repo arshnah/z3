@@ -187,9 +187,21 @@ const YT_STREAM_CHUNK = 5 * 1024 * 1024;
  * requests. Returns a WHATWG `ReadableStream` so callers can treat it exactly
  * like the stream `yt.download()` used to hand back.
  */
-function streamRangedUrl(url: string, contentLength: number): ReadableStream<Uint8Array> {
-    let position = 0;
+async function streamRangedUrl(url: string, contentLength: number): Promise<ReadableStream<Uint8Array>> {
+    const firstEnd = Math.min(YT_STREAM_CHUNK - 1, contentLength - 1);
+    const firstResponse = await fetch(`${url}&range=0-${firstEnd}`);
+    if (!firstResponse.ok) {
+        throw new Error(`YouTube stream returned ${firstResponse.status} for range 0-${firstEnd}`);
+    }
+    const firstChunk = new Uint8Array(await firstResponse.arrayBuffer());
+    if (!firstChunk.length) throw new Error('YouTube returned an empty audio stream.');
+
+    let position = firstChunk.length;
     return new ReadableStream<Uint8Array>({
+        start(controller) {
+            controller.enqueue(firstChunk);
+            if (position >= contentLength) controller.close();
+        },
         async pull(controller) {
             if (position >= contentLength) {
                 controller.close();
@@ -250,6 +262,7 @@ async function downloadYtAudio(videoId: string): Promise<ReadableStream<Uint8Arr
         for (const opts of formatAttempts) {
             try {
                 const format = info.chooseFormat(opts as any);
+                if (!format.url && !format.signature_cipher && !format.cipher) continue;
                 const url = `${await format.decipher(yt.session.player)}&pot=${pot}`;
                 const contentLength = Number(format.content_length) || 0;
                 if (!contentLength) {
@@ -258,13 +271,13 @@ async function downloadYtAudio(videoId: string): Promise<ReadableStream<Uint8Arr
                     if (!res.ok || !res.body) throw new Error(`YouTube stream returned ${res.status}`);
                     return res.body;
                 }
-                return streamRangedUrl(url, contentLength);
+                return await streamRangedUrl(url, contentLength);
             } catch (err: any) {
                 lastErr = err;
             }
         }
     }
-    throw lastErr ?? new Error(`Could not resolve a playable audio format for ${videoId}`);
+    throw lastErr ?? new Error(`YouTube did not provide a decipherable audio format for ${videoId}`);
 }
 
 async function webStreamToBuffer(stream: ReadableStream<Uint8Array>): Promise<Buffer> {
