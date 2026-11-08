@@ -156,17 +156,43 @@ export class ScrobblingService {
         });
     }
 
-    private metadata(track: ScrobbleTrack) {
+    private cleanTrack(track: ScrobbleTrack): ScrobbleTrack {
+        const seenArtists = new Set<string>();
+        const artists = track.artists
+            .map((artist) => artist.trim().replace(/\s+/g, ' '))
+            .filter((artist) => {
+                const key = artist.toLowerCase();
+                if (!artist || seenArtists.has(key)) return false;
+                seenArtists.add(key);
+                return true;
+            });
+        const album = track.album?.trim().replace(/\s+/g, ' ');
         return {
-            artist_name: track.artists.join(', '), track_name: track.title,
+            ...track,
+            title: track.title.trim().replace(/\s+/g, ' '),
+            artists,
+            ...(album ? { album } : { album: undefined }),
+        };
+    }
+
+    private metadata(track: ScrobbleTrack) {
+        const artists = track.artists.join(', ');
+        return {
+            artist_name: artists, track_name: track.title,
             ...(track.album ? { release_name: track.album } : {}),
-            additional_info: { media_player: 'Zeta', submission_client: 'zeta', duration_ms: Math.round(track.duration * 1000) },
+            additional_info: {
+                artist_names: track.artists,
+                media_player: 'Zeta',
+                submission_client: 'zeta',
+                duration_ms: Math.round(track.duration * 1000),
+            },
         };
     }
 
     private async send(provider: ScrobbleProvider, data: ScrobbleData, track: ScrobbleTrack, timestamp?: number) {
+        track = this.cleanTrack(track);
         if (provider === 'lastfm') {
-            const values: Record<string, string> = { artist: track.artists[0], track: track.title, duration: String(Math.round(track.duration)) };
+            const values: Record<string, string> = { artist: track.artists.join(', '), track: track.title, duration: String(Math.round(track.duration)) };
             if (track.album) values.album = track.album;
             if (timestamp !== undefined) values.timestamp = String(timestamp);
             const result = await this.lastfm(timestamp === undefined ? 'track.updateNowPlaying' : 'track.scrobble', values, data.lastfm.sessionKey);
@@ -183,7 +209,8 @@ export class ScrobblingService {
     }
 
     async nowPlaying(track: ScrobbleTrack) {
-        if (!track.title.trim() || !track.artists[0]?.trim()) return;
+        track = this.cleanTrack(track);
+        if (!track.title || !track.artists.length) return;
         const data = await this.snapshot();
         await Promise.all((['lastfm', 'listenbrainz'] as const).map(async (provider) => {
             if (!data[provider].enabled || !data[provider].username) return;
@@ -196,7 +223,8 @@ export class ScrobblingService {
     }
 
     async submit(track: ScrobbleTrack, startedAt: number, listenedMs: number) {
-        if (!qualifiesForScrobble(track.duration, listenedMs) || !track.title.trim() || !track.artists[0]?.trim()) return;
+        track = this.cleanTrack(track);
+        if (!qualifiesForScrobble(track.duration, listenedMs) || !track.title || !track.artists.length) return;
         const timestamp = Math.floor(startedAt / 1000);
         if (!Number.isFinite(timestamp) || timestamp <= 0 || timestamp > Date.now() / 1000 + 60) return;
         const id = `${track.id}:${timestamp}`;
