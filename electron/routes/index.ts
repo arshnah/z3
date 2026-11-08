@@ -184,9 +184,56 @@ const windowChrome = {
 
 /* ------------------------------- Discord RPC ------------------------------ */
 
-const rpc = new Client({ clientId: '1499408750526595152' });
+let rpc: Client;
+let rpcActivity: SetActivity | null = null;
+let rpcLoginPromise: Promise<void> | null = null;
+let rpcRetryTimer: ReturnType<typeof setTimeout> | null = null;
 
-rpc.login().catch(err => console.warn("Discord RPC failed to connect (is Discord running?):", err));
+function scheduleRPCReconnect() {
+    if (rpcRetryTimer) return;
+    rpcRetryTimer = setTimeout(() => {
+        rpcRetryTimer = null;
+        void connectRPC();
+    }, 10_000);
+    rpcRetryTimer.unref?.();
+}
+
+function createRPCClient(): Client {
+    const client = new Client({ clientId: '1499408750526595152' });
+    client.on('ready', () => {
+        if (client !== rpc || !rpcActivity) return;
+        client.user?.setActivity(rpcActivity).catch((err) => console.warn('[discord-rpc] Failed to restore activity:', err));
+    });
+    client.on('disconnected', () => {
+        if (client !== rpc) return;
+        rpc = createRPCClient();
+        scheduleRPCReconnect();
+    });
+    return client;
+}
+
+async function connectRPC(): Promise<void> {
+    if (rpcRetryTimer) {
+        clearTimeout(rpcRetryTimer);
+        rpcRetryTimer = null;
+    }
+    if (rpc.isConnected) return;
+    if (rpcLoginPromise) return rpcLoginPromise;
+
+    const client = rpc;
+    rpcLoginPromise = client.login().catch((err) => {
+        if (client !== rpc) return;
+        console.warn('[discord-rpc] Failed to connect, retrying:', err);
+        rpc = createRPCClient();
+        scheduleRPCReconnect();
+    }).finally(() => {
+        rpcLoginPromise = null;
+    });
+    return rpcLoginPromise;
+}
+
+rpc = createRPCClient();
+void connectRPC();
 
 /**
  * Discord's servers fetch rich-presence artwork themselves, so only a public
@@ -272,6 +319,7 @@ export const routes = {
     },
     ...windowChrome,
     async clearRPC() {
+        rpcActivity = null;
         if (!rpc.user) return;
         await rpc.user.clearActivity();
     },
@@ -290,7 +338,11 @@ export const routes = {
         return '';
     },
     async setRPC(activity: SetActivity): Promise<SetActivityResponse | null> {
-        if (!rpc.user) return null;
+        rpcActivity = activity;
+        if (!rpc.user) {
+            void connectRPC();
+            return null;
+        }
         return await rpc.user.setActivity(activity);
     },
     ...music,
