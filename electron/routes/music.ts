@@ -637,41 +637,50 @@ function needsMetadataRepair(record: IndexRecord): boolean {
     return /\[(yt|js)_[^\]]+\]\s*$/i.test(record.title) || record.artists[0]?.name === 'Unknown Artist' || !record.thumbnails.length;
 }
 
-/**
- * One-time (idempotent) migration: index any audio files sitting in the music
- * directory that aren't in `.zeta/index.json` yet — e.g. `.mp3`s downloaded
- * before the MP4 rewrite. Reads their tags and restores canonical ids so they
- * become first-class, de-duplicated, round-trippable library entries.
- */
-async function migrateLegacyFiles(): Promise<void> {
-    if (!vfs.isLocal) return; // needs random-access tag reads
+/** List supported audio files recursively, keeping paths relative to the music folder. */
+async function listAudioFiles(): Promise<string[]> {
+    const files: string[] = [];
+    const pending = [''];
 
-    let entries;
-    try {
-        entries = await vfs.readdir('');
-    } catch {
-        return;
+    while (pending.length) {
+        const directory = pending.pop()!;
+        for (const entry of await vfs.readdir(directory)) {
+            const path = directory ? `${directory}/${entry.name}` : entry.name;
+            if (entry.isDirectory) {
+                if (path !== '.zeta') pending.push(path);
+            } else if (entry.isFile && isAudioFile(entry.name)) {
+                files.push(path);
+            }
+        }
     }
 
+    return files.sort((a, b) => a.localeCompare(b));
+}
+
+/**
+ * Index audio files in the music folder (including subfolders) that aren't in
+ * the metadata index yet, so local files become playable library tracks.
+ */
+async function migrateLegacyFiles(files: string[]): Promise<void> {
     const all = await metadata.all();
     const indexedFiles = new Set(all.map((r) => r.file).filter((f): f is string => !!f));
     const indexedIds = new Set(all.map((r) => r.id));
 
     const records: IndexRecord[] = [];
-    for (const entry of entries) {
-        if (!entry.isFile || !isAudioFile(entry.name)) continue;
-        if (indexedFiles.has(entry.name)) continue;
+    for (const file of files) {
+        if (indexedFiles.has(file)) continue;
 
-        const id = parseLegacyId(entry.name) ?? `local:${entry.name}`;
+        const id = parseLegacyId(file) ?? `local:${file}`;
         if (indexedIds.has(id)) continue;
 
-        const local = vfs.localPath(entry.name);
+        const local = vfs.isLocal ? vfs.localPath(file) : null;
         const tags = local ? await readAudioTags(local) : null;
-        const fromName = parseLegacyName(entry.name);
+        const basename = file.slice(file.lastIndexOf('/') + 1);
+        const fromName = parseLegacyName(basename);
 
         records.push({
             id,
-            file: entry.name,
+            file,
             title: tags?.title || fromName.title,
             artists: tags?.artists?.length
                 ? tags.artists
@@ -1141,9 +1150,10 @@ export const routes = {
 
         await ensureFavourites();
 
-        // Pull any pre-rewrite (e.g. .mp3) files into the index so they behave
-        // like first-class library entries.
-        await migrateLegacyFiles().catch((err) => console.error('[migrate] failed:', err));
+        // Index files recursively so local audio in organized subfolders is
+        // available just like files at the music-folder root.
+        const audioFiles = await listAudioFiles();
+        await migrateLegacyFiles(audioFiles);
 
         const entries = await vfs.readdir('');
         const playlists: Playlist[] = [];
@@ -1156,6 +1166,20 @@ export const routes = {
                     console.error(`[library] Failed to read playlist ${entry.name}:`, err);
                 }
             }
+        }
+
+        const audioFileSet = new Set(audioFiles);
+        const localTracks = (await metadata.all())
+            .filter((record) => record.id.startsWith('local:') && record.file && audioFileSet.has(record.file))
+            .map((record) => MetadataStore.toSong(record));
+        if (localTracks.length) {
+            playlists.push({
+                id: 'music-folder',
+                name: 'Music Folder',
+                tracks: localTracks,
+                createdAt: 0,
+                isProtected: true,
+            });
         }
 
         // Stable order: Favourites first, then oldest → newest.
