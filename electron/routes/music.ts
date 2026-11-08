@@ -1,9 +1,12 @@
 import { Innertube, Parser, Platform, type Types } from 'youtubei.js';
 import { Song as Saavn } from '@saavn-labs/sdk';
 
-import { readFileSync, writeFileSync } from 'node:fs';
+import { copyFileSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { execFile } from 'node:child_process';
+import { basename, dirname, extname, isAbsolute, relative, resolve, sep } from 'node:path';
 import { promisify } from 'node:util';
+import { fileURLToPath } from 'node:url';
 
 const execFileAsync = promisify(execFile);
 
@@ -1662,6 +1665,103 @@ export const routes = {
             liked: imported.likedIds.length,
         });
         return { songs: toAdd.length, playlists: imported.playlists.length, liked: imported.likedIds.length };
+    },
+
+    /** Import a local M3U playlist, copying referenced files into managed storage when needed. */
+    async m3uImportFrom(filePath: string): Promise<{ playlist: Playlist; imported: number; skipped: number }> {
+        await ensureStorage();
+        const source = resolve(filePath);
+        const content = readFileSync(source, 'utf8').replace(/^\uFEFF/, '');
+        const lines = content.split(/\r?\n/);
+        const root = vfs.isLocal ? resolve(vfs.root) : null;
+        const songs: Song[] = [];
+        const seen = new Set<string>();
+        let extinf: string | null = null;
+        let skipped = 0;
+
+        for (const rawLine of lines) {
+            const line = rawLine.trim();
+            if (!line) continue;
+            if (line.startsWith('#EXTINF:')) {
+                extinf = line.slice('#EXTINF:'.length).split(',').slice(1).join(',').trim() || null;
+                continue;
+            }
+            if (line.startsWith('#')) continue;
+            const fallback = extinf;
+            extinf = null;
+
+            try {
+                let audioPath: string;
+                if (/^https?:\/\//i.test(line)) {
+                    skipped++;
+                    continue;
+                } else if (/^file:/i.test(line)) {
+                    audioPath = fileURLToPath(line);
+                } else if (isAbsolute(line)) {
+                    audioPath = line;
+                } else {
+                    audioPath = resolve(dirname(source), line);
+                }
+
+                if (!isAudioFile(audioPath) || !statSync(audioPath).isFile()) {
+                    skipped++;
+                    continue;
+                }
+
+                let libraryPath: string;
+                const inLibrary = root ? relative(root, audioPath) : '..';
+                if (root && inLibrary !== '..' && !inLibrary.startsWith(`..${sep}`) && !isAbsolute(inLibrary)) {
+                    libraryPath = inLibrary.split(sep).join('/');
+                } else {
+                    const originalName = basename(audioPath);
+                    const fileHash = createHash('sha256').update(audioPath.toLowerCase()).digest('hex').slice(0, 16);
+                    libraryPath = `.zeta/imports/${fileHash}/${originalName}`;
+                    if (!(await vfs.exists(libraryPath))) {
+                        await vfs.mkdir(dirname(libraryPath).split(sep).join('/'));
+                        const destination = vfs.localPath(libraryPath);
+                        if (destination) copyFileSync(audioPath, destination);
+                        else await vfs.writeFile(libraryPath, readFileSync(audioPath));
+                    }
+                }
+
+                let record = await metadata.getByFile(libraryPath);
+                if (!record) {
+                    const local = vfs.localPath(libraryPath);
+                    const tags = local ? await readAudioTags(local) : null;
+                    const fallbackParts = fallback?.match(/^(.*?)\s+-\s+(.*)$/);
+                    record = {
+                        id: `local:${libraryPath}`,
+                        file: libraryPath,
+                        title: tags?.title || fallbackParts?.[2] || basename(audioPath, extname(audioPath)),
+                        artists: tags?.artists?.length
+                            ? tags.artists
+                            : [{ name: fallbackParts?.[1] || 'Unknown Artist', thumbnails: [] }],
+                        album: tags?.album ?? null,
+                        duration: tags?.duration ?? 0,
+                        year: tags?.year,
+                        lyrics: tags?.lyrics ?? null,
+                        thumbnails: tags?.thumbnails ?? [],
+                    };
+                    await metadata.upsert(record);
+                }
+
+                const song = MetadataStore.toSong(record);
+                if (!seen.has(song.id)) {
+                    songs.push(song);
+                    seen.add(song.id);
+                }
+            } catch (error) {
+                console.warn(`[playlist import] Skipped entry "${line}":`, error);
+                skipped++;
+            }
+        }
+
+        if (!songs.length) throw new Error('No playable local audio files were found in this playlist.');
+
+        const playlistName = basename(source, extname(source)) || 'Imported playlist';
+        const playlist = await routes.musicPlaylistCreate(playlistName);
+        await writePlaylist(playlist.id, songs, await readPlaylistMeta(playlist.id));
+        return { playlist: await readPlaylistFile(playlist.id), imported: songs.length, skipped };
     },
 
     /* ------------------------------- stats -------------------------------- */

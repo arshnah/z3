@@ -39,8 +39,10 @@ const MUSIC_ROUTES = [
     'fetchImage',
     'getSettings',
     'setMusicDir',
+    'setDiscordRpcEnabled',
     'muzzaExportTo',
     'muzzaImportFrom',
+    'm3uImportFrom',
     'statsRecordEvent',
     'statsSummary',
 ] as const satisfies readonly (keyof Music)[];
@@ -101,6 +103,20 @@ const dialogs = {
         });
         if (picked.canceled || picked.filePaths.length === 0) return null;
         return music.muzzaImportFrom(picked.filePaths[0]);
+    },
+
+    /** Import a local `.m3u` or `.m3u8` playlist. */
+    async m3uImport() {
+        const picked = await dialog.showOpenDialog(parentWindow(), {
+            title: 'Import playlist',
+            properties: ['openFile'],
+            filters: [
+                { name: 'M3U playlists', extensions: ['m3u', 'm3u8'] },
+                { name: 'All files', extensions: ['*'] },
+            ],
+        });
+        if (picked.canceled || picked.filePaths.length === 0) return null;
+        return music.m3uImportFrom(picked.filePaths[0]);
     },
 };
 

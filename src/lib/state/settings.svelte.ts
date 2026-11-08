@@ -109,6 +109,25 @@ class SettingsStore {
             this.busyMuzza = false;
         }
     }
+
+    busyM3u = $state(false);
+
+    /** Import a local M3U playlist and its referenced audio files. */
+    async importM3uPlaylist() {
+        if (this.busyM3u) return;
+        this.busyM3u = true;
+        try {
+            const result = await client.m3uImport();
+            if (!result) return;
+            await libraryState.refresh();
+            const skipped = result.skipped ? ` (${result.skipped} entries skipped)` : "";
+            toasts.success(`Imported “${result.playlist.name}” with ${result.imported} songs${skipped}.`);
+        } catch (err) {
+            toasts.error(err);
+        } finally {
+            this.busyM3u = false;
+        }
+    }
 }
 
 export const settingsState = new SettingsStore();

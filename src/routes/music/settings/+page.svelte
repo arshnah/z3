@@ -175,6 +175,13 @@
                 any player can open. Local folders and remote storage are supported:
                 <code>sftp://user:pass@host:port/path</code>, <code>ftp://…</code> or <code>ftps://…</code>.
             </p>
+            <p class="muted">Import an <code>.m3u</code> or <code>.m3u8</code> playlist. Referenced local audio is copied into this music folder when it is not already there.</p>
+            <div class="btn-row">
+                <button class="btn" onclick={() => settingsState.importM3uPlaylist()} disabled={settingsState.busyM3u}>
+                    {#if settingsState.busyM3u}<span class="spin"><Icon name="loader-circle" /></span>{:else}<Icon name="list-music" />{/if}
+                    Import M3U playlist
+                </button>
+            </div>
             <div class="dir-row">
                 <input
                     class="input"
