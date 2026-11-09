@@ -1,7 +1,7 @@
 import { browser } from "$app/environment";
 
 /** "stage" layers live lyrics over the visualizer. */
-export type NowPlayingMode = "lyrics" | "stage" | "visualizer";
+export type NowPlayingMode = "lyrics" | "stage" | "visualizer" | "video";
 export type SidePanel = "queue" | "lyrics" | null;
 
 const PREFS_KEY = "zeta:ui-prefs";

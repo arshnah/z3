@@ -573,8 +573,8 @@
         else if (k === "y") ui.toggleSidePanel("lyrics");
         else if (k === "f" && playerState.currentTrack) ui.nowPlayingOpen = !ui.nowPlayingOpen;
         else if (k === "v" && playerState.currentTrack) {
-            // Cycle lyrics → stage → visualizer, then wrap around.
-            const order = ["lyrics", "stage", "visualizer"] as const;
+            // Cycle through full-screen player modes, then wrap around.
+            const order = ["lyrics", "stage", "visualizer", "video"] as const;
             const next = order[(order.indexOf(ui.nowPlayingMode) + 1) % order.length];
             ui.openNowPlaying(ui.nowPlayingOpen ? next : "visualizer");
         }

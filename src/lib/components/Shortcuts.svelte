@@ -16,7 +16,7 @@
         [["Q"], "Queue"],
         [["Y"], "Lyrics panel"],
         [["F"], "Full-screen player"],
-        [["V"], "Visualizer"],
+        [["V"], "Cycle player modes"],
         [["Ctrl", "K"], "Search"],
         [["?"], "This list"],
     ];
