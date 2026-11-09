@@ -37,7 +37,6 @@
     const mode = $derived(ui.nowPlayingMode);
     const pack = $derived(VISUALIZER_PACKS.find((p) => p.id === ui.visualizerPack) ?? VISUALIZER_PACKS[0]);
     const artSrc = $derived(artworkState.url);
-    let stageDisplay = $state<"visualizer" | "video">("visualizer");
     let videos = $state<Song[]>([]);
     let selectedVideo = $state<Song | null>(null);
     let videoLoading = $state(false);
@@ -45,7 +44,7 @@
     let videoRequest = 0;
     let requestedVideoTrack = $state("");
     let videoWasPlaying = false;
-    const videoRequested = $derived(mode === "video" || (mode === "stage" && stageDisplay === "video"));
+    const videoRequested = $derived(mode === "video");
 
     // Hide chrome when the mouse is idle (visualizer mode).
     let idle = $state(false);
@@ -67,11 +66,6 @@
     function setPack(id: string) {
         ui.visualizerPack = id;
         ui.save();
-    }
-
-    function setStageDisplay(display: "visualizer" | "video") {
-        stageDisplay = display;
-        if (display === "video" && track && requestedVideoTrack !== track.id) void loadVideosForTrack(track);
     }
 
     function normalizeVideoText(value: string) {
@@ -212,25 +206,12 @@
             </div>
         </div>
         {#if mode === "stage" || mode === "visualizer"}
-            <!-- Its own floating row: four packs plus three modes don't fit on one line. -->
             <div class="packs-bar">
-                {#if mode === "stage"}
-                    <div class="segmented stage-display">
-                        <button aria-pressed={stageDisplay === "visualizer"} onclick={() => setStageDisplay("visualizer")}>
-                            <Icon name="audio-waveform" /> Visualizer
-                        </button>
-                        <button aria-pressed={stageDisplay === "video"} onclick={() => setStageDisplay("video")}>
-                            <Icon name="film" /> Music Video
-                        </button>
-                    </div>
-                {/if}
-                {#if mode === "visualizer" || stageDisplay === "visualizer"}
-                    <div class="segmented packs">
-                        {#each VISUALIZER_PACKS as p}
-                            <button aria-pressed={p.id === pack.id} onclick={() => setPack(p.id)}>{p.name}</button>
-                        {/each}
-                    </div>
-                {/if}
+                <div class="segmented packs">
+                    {#each VISUALIZER_PACKS as p}
+                        <button aria-pressed={p.id === pack.id} onclick={() => setPack(p.id)}>{p.name}</button>
+                    {/each}
+                </div>
             </div>
         {/if}
     </header>
@@ -273,55 +254,25 @@
                 </div>
                 <div class="vis-pane">
                     <div class="vis-frame">
-                        {#if stageDisplay === "video"}
-                            {#if selectedVideoId}
-                                <iframe
-                                    class="stage-video-frame"
-                                    src="https://www.youtube-nocookie.com/embed/{selectedVideoId}?autoplay=1&playsinline=1&rel=0"
-                                    title="{selectedVideo?.title ?? track.title} music video"
-                                    allow="autoplay; encrypted-media; picture-in-picture; web-share"
-                                    referrerpolicy="strict-origin-when-cross-origin"
-                                    allowfullscreen
-                                ></iframe>
-                            {:else if videoLoading}
-                                <div class="stage-video-state"><span class="spin"><Icon name="loader-circle" /></span><span>Finding a video for this song…</span></div>
-                            {:else if videoError}
-                                <div class="stage-video-state">
-                                    <Icon name="triangle-alert" />
-                                    <span>{videoError}</span>
-                                    <button class="video-retry" onclick={retryVideoSearch}>Try again</button>
-                                </div>
-                            {:else}
-                                <div class="stage-video-state"><Icon name="film" /><span>No music video found for this song.</span></div>
-                            {/if}
-                        {:else}
-                            {#key pack.id}
-                                <div class="vis-canvas" transition:fade={{ duration: 400 }}>
-                                    {@render visualizer()}
-                                </div>
-                            {/key}
-                            {#if pack.id === "halo"}
-                                <div class="disc framed" class:spinning={!playerState.paused}>
-                                    <Cover src={artSrc} thumbnails={track.thumbnails} title={track.title} size="100%" radius="50%" />
-                                </div>
-                            {/if}
+                        {#key pack.id}
+                            <div class="vis-canvas" transition:fade={{ duration: 400 }}>
+                                {@render visualizer()}
+                            </div>
+                        {/key}
+                        {#if pack.id === "halo"}
+                            <div class="disc framed" class:spinning={!playerState.paused}>
+                                <Cover src={artSrc} thumbnails={track.thumbnails} title={track.title} size="100%" radius="50%" />
+                            </div>
                         {/if}
                     </div>
                     <div class="vis-bar">
                         <div class="vis-meta">
-                            {#if stageDisplay === "video" || pack.id !== "halo"}
+                            {#if pack.id !== "halo"}
                                 <Cover src={artSrc} thumbnails={track.thumbnails} title={track.title} size={56} radius="var(--r-sm)" />
                             {/if}
                             {@render meta()}
                         </div>
-                        {#if stageDisplay === "video" && selectedVideoId}
-                            <div class="video-audio-paused">
-                                <span><Icon name="volume-x" /> Audio paused while the music video plays</span>
-                                <button onclick={() => setStageDisplay("visualizer")}>Stop video &amp; resume audio</button>
-                            </div>
-                        {:else}
-                            {@render controls()}
-                        {/if}
+                        {@render controls()}
                     </div>
                 </div>
             </div>
@@ -331,7 +282,7 @@
                     {#if selectedVideoId}
                         <iframe
                             class="video-frame"
-                            src="https://www.youtube-nocookie.com/embed/{selectedVideoId}?autoplay=1&playsinline=1&rel=0"
+                            src="https://www.youtube-nocookie.com/embed/{selectedVideoId}?autoplay=1&playsinline=1&rel=0&cc_load_policy=1"
                             title="{selectedVideo?.title ?? track.title} music video"
                             allow="autoplay; encrypted-media; picture-in-picture; web-share"
                             referrerpolicy="strict-origin-when-cross-origin"
@@ -503,9 +454,6 @@
         left: 50%;
         translate: -50% 0;
         transition: opacity 0.6s;
-    }
-    .packs-bar > .segmented + .segmented {
-        margin-top: 6px;
     }
     .top .icon-btn {
         color: #fff;
@@ -817,68 +765,6 @@
     }
     .vis-frame .vis-canvas {
         border-radius: inherit;
-    }
-    .stage-video-frame {
-        position: absolute;
-        inset: 0;
-        width: 100%;
-        height: 100%;
-        border: 0;
-        background: #050507;
-    }
-    .stage-video-state {
-        position: absolute;
-        inset: 0;
-        display: flex;
-        flex-direction: column;
-        align-items: center;
-        justify-content: center;
-        gap: 12px;
-        padding: 24px;
-        color: rgb(255 255 255 / 0.72);
-        text-align: center;
-    }
-    .stage-video-state > :global(svg) {
-        width: 30px;
-        height: 30px;
-        opacity: 0.75;
-    }
-    .stage-video-state .spin :global(svg) {
-        animation: spin 1s linear infinite;
-    }
-    .video-audio-paused {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        gap: 12px;
-        padding: 10px 12px;
-        border: 1px solid rgb(255 255 255 / 0.1);
-        border-radius: 14px;
-        background: rgb(255 255 255 / 0.05);
-        color: rgb(255 255 255 / 0.72);
-        font-size: 12px;
-    }
-    .video-audio-paused > span {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-    }
-    .video-audio-paused :global(svg) {
-        width: 16px;
-        height: 16px;
-        flex-shrink: 0;
-    }
-    .video-audio-paused button {
-        flex: 0 0 auto;
-        padding: 7px 10px;
-        border-radius: 999px;
-        background: rgb(255 255 255 / 0.12);
-        color: #fff;
-        font-size: 11px;
-        font-weight: 650;
-    }
-    .video-audio-paused button:hover {
-        background: rgb(255 255 255 / 0.2);
     }
     .vis-bar {
         display: flex;
