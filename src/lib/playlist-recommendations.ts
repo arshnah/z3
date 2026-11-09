@@ -61,3 +61,21 @@ export function filterRecommendationsByArtist(recommendations: Song[], limit = 8
 
     return filtered;
 }
+
+export function filterRadioRecommendations(
+    seed: Song,
+    recommendations: Song[],
+    knownTracks: Song[] = [],
+    limit = 25,
+): Song[] {
+    if (limit <= 0) return [];
+    const unique = filterPlaylistRecommendations(recommendations, [seed, ...knownTracks], recommendations.length);
+    const diverse = filterRecommendationsByArtist(unique, limit);
+    if (diverse.length >= limit) return diverse;
+
+    const selected = new Set(diverse.map((track) => track.id));
+    return [
+        ...diverse,
+        ...unique.filter((track) => !selected.has(track.id)).slice(0, limit - diverse.length),
+    ];
+}

@@ -62,6 +62,51 @@ export async function search(query: string, provider: MusicProvider): Promise<So
         .filter((s): s is Song => s !== null);
 }
 
+export async function radio(seed: Song, exclude: string[] = [], downloaded = new Set<string>()): Promise<Song[]> {
+    const omitted = new Set([...exclude, seed.id]);
+    if (seed.id.startsWith('js:')) {
+        try {
+            const recommendations = await Saavn.getRecommendations({ songId: seed.id.slice(3) });
+            const songs = (recommendations ?? [])
+                .map((song) => saavnToSong(song, downloaded))
+                .filter((song) => !omitted.has(song.id));
+            if (songs.length) return songs;
+        } catch (error) {
+            console.warn('[radio] JioSaavn recommendations failed, falling back to YouTube Music:', error);
+        }
+    }
+
+    const tube = await yt();
+    let videoId = seed.id.startsWith('yt:') ? seed.id.slice(3) : null;
+    if (!videoId) {
+        const query = `${seed.title} ${seed.artists.map((artist) => artist.name).join(' ')}`.trim();
+        const result = await tube.music.search(query, { type: 'song' });
+        const candidates = ytSearchItems(result, 'song', 'songs')
+            .map((item) => ytToSong(item, downloaded))
+            .filter((song): song is Song => song !== null);
+        const title = normalizeRadioText(seed.title);
+        const artists = new Set(seed.artists.map((artist) => normalizeRadioText(artist.name)));
+        const match = candidates.find((candidate) =>
+            normalizeRadioText(candidate.title) === title
+            && candidate.artists.some((artist) => artists.has(normalizeRadioText(artist.name))),
+        );
+        videoId = match?.id.startsWith('yt:') ? match.id.slice(3) : null;
+    }
+    if (!videoId) return [];
+
+    const panel = await tube.music.getUpNext(videoId, true);
+    return (panel?.contents ?? []).flatMap((item: any) => {
+        const video = item?.video_id ? item : item?.primary ?? item?.content;
+        if (!video?.video_id || omitted.has(`yt:${video.video_id}`)) return [];
+        const song = ytToSong({ ...video, id: video.video_id }, downloaded);
+        return song ? [song] : [];
+    });
+}
+
+function normalizeRadioText(value: string) {
+    return value.normalize('NFKD').replace(/\p{Diacritic}/gu, '').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
+}
+
 export async function searchExtras(query: string, provider: MusicProvider): Promise<SearchExtras> {
     return searchMusicExtras(async () => (await yt()).music, query, provider);
 }

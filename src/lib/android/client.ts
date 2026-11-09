@@ -208,10 +208,13 @@ export const androidClient: Routes = {
         return storage.edit((state) => { const p = requirePlaylist(state, id); p.thumbnail = thumbnail; return p; });
     },
     async musicRadio(seed, exclude = []) {
-        const provider = seed.id.startsWith('js:') ? 'js' : 'yt';
-        const songs = await androidClient.musicSearch(`${seed.artists[0]?.name ?? ''} ${seed.title}`, provider);
-        const omitted = new Set([seed.id, ...exclude]);
-        return songs.filter((s) => !omitted.has(s.id)).slice(0, 20);
+        const data = await storage.snapshot();
+        const downloaded = new Set(Object.entries(data.songs).filter(([, song]) => song.file).map(([id]) => id));
+        const songs = await providers.radio(seed, exclude, downloaded);
+        return cacheSongs(songs.map((song) => ({
+            ...song,
+            isDownloaded: !!data.songs[song.id]?.file,
+        })));
     },
     async musicRepairMetadata() { return { repaired: [], remaining: 0 }; },
     async musicCover() { return null; },
