@@ -116,6 +116,8 @@ export const androidClient: Routes = {
         return cacheSongs((await providers.search(query, provider)).map((song) => ({ ...song, isDownloaded: !!data.songs[song.id]?.file })));
     },
     musicSearchExtras: providers.searchExtras,
+    musicSearchPlaylists: providers.searchPlaylists,
+    musicSearchAlbums: providers.searchAlbums,
     async musicArtist(idOrQuery, nameHint) {
         const data = await storage.snapshot();
         const downloaded = new Set(Object.values(data.songs).filter((s) => s.file).map((s) => s.song.id));

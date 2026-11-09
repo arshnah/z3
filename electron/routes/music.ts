@@ -39,7 +39,9 @@ import {
     fetchArtistDetails,
     fetchCollectionDetails,
     saavnToSong,
+    searchMusicAlbums,
     searchMusicExtras,
+    searchMusicPlaylists,
     ytToSong,
 } from '../../src/lib/music-catalog';
 
@@ -1052,6 +1054,14 @@ export const routes = {
 
     async musicSearchExtras(query: string, provider: MusicProvider): Promise<SearchExtras> {
         return searchMusicExtras(async () => (await init(), yt.music), query, provider);
+    },
+
+    async musicSearchPlaylists(query: string, provider: MusicProvider) {
+        return searchMusicPlaylists(async () => (await init(), yt.music), query, provider);
+    },
+
+    async musicSearchAlbums(query: string, provider: MusicProvider) {
+        return searchMusicAlbums(async () => (await init(), yt.music), query, provider);
     },
 
     async musicArtist(idOrQuery: string, nameHint?: string): Promise<ArtistDetails> {

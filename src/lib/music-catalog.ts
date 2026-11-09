@@ -179,9 +179,10 @@ export async function searchMusicExtras(
     provider: MusicProvider,
 ): Promise<SearchExtras> {
     if (provider === 'js') {
-        const [artRes, albRes] = await Promise.allSettled([
+        const [artRes, albRes, playlistRes] = await Promise.allSettled([
             SaavnArtist.search({ query, limit: 8 }),
             SaavnAlbum.search({ query, limit: 10 }),
+            SaavnPlaylist.search({ query, limit: 10 }),
         ]);
         const artists: Artist[] =
             artRes.status === 'fulfilled'
@@ -195,13 +196,25 @@ export async function searchMusicExtras(
             albRes.status === 'fulfilled'
                 ? (albRes.value.results ?? []).map((a: any) => saavnAlbumToCollection(a, 'album'))
                 : [];
-        return { artists, albums };
+        const playlists: CollectionSummary[] =
+            playlistRes.status === 'fulfilled'
+                ? (playlistRes.value.results ?? []).map((p: any) => ({
+                      id: `js-pl:${p.id}`,
+                      kind: 'playlist',
+                      title: musicText(p.title || 'Playlist'),
+                      subtitle: [p.owner?.name, p.stats?.songCount ? `${p.stats.songCount} songs` : ''].filter(Boolean).join(' · ') || undefined,
+                      thumbnails: saavnImages(p.images),
+                      artists: [],
+                  }))
+                : [];
+        return { artists, albums, playlists };
     }
 
     const yt = await getYt();
-    const [artRes, albRes] = await Promise.allSettled([
+    const [artRes, albRes, playlistRes] = await Promise.allSettled([
         yt.search(query, { type: 'artist' }),
         yt.search(query, { type: 'album' }),
+        yt.search(query, { type: 'playlist' }),
     ]);
 
     const artists: Artist[] = [];
@@ -227,7 +240,60 @@ export async function searchMusicExtras(
         }
     }
 
-    return { artists: artists.slice(0, 8), albums: albums.slice(0, 12) };
+    const playlists: CollectionSummary[] = [];
+    if (playlistRes.status === 'fulfilled') {
+        for (const item of playlistRes.value?.playlists?.contents ?? []) {
+            const col = ytItemToCollection(item, 'playlist');
+            if (col) playlists.push(col);
+        }
+    }
+
+    return { artists: artists.slice(0, 8), albums: albums.slice(0, 12), playlists: playlists.slice(0, 12) };
+}
+
+export async function searchMusicPlaylists(
+    getYt: () => Promise<YtMusicLike>,
+    query: string,
+    provider: MusicProvider,
+): Promise<CollectionSummary[]> {
+    if (provider === 'js') {
+        const result = await SaavnPlaylist.search({ query, limit: 12 });
+        return (result.results ?? []).map((playlist: any) => ({
+            id: `js-pl:${playlist.id}`,
+            kind: 'playlist',
+            title: musicText(playlist.title || 'Playlist'),
+            subtitle: [playlist.owner?.name, playlist.stats?.songCount ? `${playlist.stats.songCount} songs` : ''].filter(Boolean).join(' · ') || undefined,
+            thumbnails: saavnImages(playlist.images),
+            artists: [],
+        }));
+    }
+
+    if (provider !== 'yt') throw new Error(`Provider '${provider}' not supported for playlist search.`);
+    const yt = await getYt();
+    const result = await yt.search(query, { type: 'playlist' });
+    return (result?.playlists?.contents ?? [])
+        .map((item: any) => ytItemToCollection(item, 'playlist'))
+        .filter((collection: CollectionSummary | null): collection is CollectionSummary => collection !== null)
+        .slice(0, 12);
+}
+
+export async function searchMusicAlbums(
+    getYt: () => Promise<YtMusicLike>,
+    query: string,
+    provider: MusicProvider,
+): Promise<CollectionSummary[]> {
+    if (provider === 'js') {
+        const result = await SaavnAlbum.search({ query, limit: 12 });
+        return (result.results ?? []).map((album: any) => saavnAlbumToCollection(album, 'album'));
+    }
+
+    if (provider !== 'yt') throw new Error(`Provider '${provider}' not supported for album search.`);
+    const yt = await getYt();
+    const result = await yt.search(query, { type: 'album' });
+    return (result?.albums?.contents ?? [])
+        .map((item: any) => ytItemToCollection(item, 'album'))
+        .filter((collection: CollectionSummary | null): collection is CollectionSummary => collection !== null)
+        .slice(0, 12);
 }
 
 export async function fetchArtistDetails(
@@ -410,7 +476,7 @@ export async function fetchArtistDetails(
     const target = comparableText(fallbackName);
     const [songRes, extras] = await Promise.all([
         yt.search(fallbackName, { type: 'song' }).catch(() => null),
-        searchMusicExtras(getYt, fallbackName, 'yt').catch(() => ({ artists: [], albums: [] })),
+        searchMusicExtras(getYt, fallbackName, 'yt').catch(() => ({ artists: [], albums: [], playlists: [] })),
     ]);
     const topSongs: Song[] = [];
     for (const item of songRes?.songs?.contents ?? []) {

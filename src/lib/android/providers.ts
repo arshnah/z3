@@ -7,7 +7,9 @@ import {
     fetchArtistDetails,
     fetchCollectionDetails,
     saavnToSong,
+    searchMusicAlbums,
     searchMusicExtras,
+    searchMusicPlaylists,
     ytToSong,
 } from '../music-catalog';
 import { fetchLrclib } from '../../../electron/lib/lyricsfile';
@@ -60,6 +62,14 @@ export async function search(query: string, provider: MusicProvider): Promise<So
 
 export async function searchExtras(query: string, provider: MusicProvider): Promise<SearchExtras> {
     return searchMusicExtras(async () => (await yt()).music, query, provider);
+}
+
+export async function searchPlaylists(query: string, provider: MusicProvider) {
+    return searchMusicPlaylists(async () => (await yt()).music, query, provider);
+}
+
+export async function searchAlbums(query: string, provider: MusicProvider) {
+    return searchMusicAlbums(async () => (await yt()).music, query, provider);
 }
 
 export async function artist(idOrQuery: string, nameHint?: string, downloaded = new Set<string>()): Promise<ArtistDetails> {

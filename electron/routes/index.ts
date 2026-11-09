@@ -14,12 +14,14 @@ import { Client, type SetActivity, type SetActivityResponse } from '@xhayper/dis
 type Music = typeof MusicRoutes;
 
 const MUSIC_ROUTES = [
-    'scrobbleStatus', 'scrobbleLastfmStart', 'scrobbleLastfmFinish', 'scrobbleListenbrainzConnect',
+    'scrobbleStatus', 'scrobbleTaste', 'scrobbleSimilarArtists', 'scrobbleLastfmStart', 'scrobbleLastfmFinish', 'scrobbleListenbrainzConnect',
     'scrobbleSetEnabled', 'scrobbleDisconnect', 'scrobbleNowPlaying', 'scrobbleSubmit', 'scrobbleRetry',
     'musicLyrics',
     'musicSearchSuggestions',
     'musicSearch',
     'musicSearchExtras',
+    'musicSearchPlaylists',
+    'musicSearchAlbums',
     'musicArtist',
     'musicArtistSongs',
     'musicCollection',

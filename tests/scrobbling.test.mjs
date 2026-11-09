@@ -121,6 +121,55 @@ test('authentication stores sessions privately and status omits tokens', async (
     assert.equal((await app.service.status()).lastfm.connected, true);
 });
 
+test('Last.fm taste uses recent listening only when connected', async () => {
+    const calls = [];
+    const app = fixture(connected(), async (url, options) => {
+        calls.push({ url, options });
+        return Response.json({ recenttracks: { track: [
+            { name: 'Track One', artist: { '#text': 'Artist One' }, album: { '#text': 'Album One' } },
+            { name: 'Track Two', artist: { name: 'Artist Two' } },
+            { name: '', artist: { '#text': 'Unknown' } },
+        ] } });
+    });
+
+    assert.deepEqual(await app.service.taste(), [
+        { id: 'lastfm:artist one:track one', title: 'Track One', artists: ['Artist One'], album: 'Album One', duration: 0 },
+        { id: 'lastfm:artist two:track two', title: 'Track Two', artists: ['Artist Two'], duration: 0 },
+    ]);
+    const params = new URLSearchParams(calls[0].options.body);
+    assert.equal(params.get('method'), 'user.getRecentTracks');
+    assert.equal(params.get('user'), 'last-user');
+    assert.equal(params.get('limit'), '100');
+    assert.equal(params.has('sk'), false);
+
+    const disconnected = fixture();
+    assert.deepEqual(await disconnected.service.taste(), []);
+});
+
+test('Last.fm similar-artist discovery excludes listened artists and ranks shared matches', async () => {
+    const calls = [];
+    const app = fixture(connected(), async (_url, options) => {
+        const params = new URLSearchParams(options.body);
+        calls.push(params);
+        if (params.get('method') === 'user.getRecentTracks') {
+            return Response.json({ recenttracks: { track: [
+                { artist: { '#text': 'Artist One' } },
+                { artist: { '#text': 'Artist Two' } },
+                { artist: { '#text': 'Artist One' } },
+            ] } });
+        }
+        return Response.json({ similarartists: { artist: [
+            { name: 'Artist One', match: '1' },
+            { name: 'New Artist', match: params.get('artist') === 'Artist One' ? '0.5' : '0.9' },
+            { name: params.get('artist') === 'Artist One' ? 'Artist A' : 'Artist B', match: '0.2' },
+        ] } });
+    });
+
+    assert.deepEqual(await app.service.similarArtists(), ['New Artist', 'Artist A', 'Artist B']);
+    assert.equal(calls.filter((params) => params.get('method') === 'artist.getSimilar').length, 2);
+    assert.equal(calls.find((params) => params.get('method') === 'artist.getSimilar').get('limit'), '10');
+});
+
 test('disconnect removes queued delivery for that account and disabled accounts send nothing', async () => {
     const app = fixture(connected(), async () => { throw new Error('Offline'); });
     await app.service.submit(track, Date.now() - 100000, 50000);

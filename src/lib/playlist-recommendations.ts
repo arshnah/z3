@@ -46,3 +46,18 @@ export function filterPlaylistRecommendations(
 
     return filtered;
 }
+
+export function filterRecommendationsByArtist(recommendations: Song[], limit = 8): Song[] {
+    const seen = new Set<string>();
+    const filtered: Song[] = [];
+
+    for (const recommendation of recommendations) {
+        const artists = artistKeys(recommendation);
+        if ([...artists].some((artist) => seen.has(artist))) continue;
+        artists.forEach((artist) => seen.add(artist));
+        filtered.push(recommendation);
+        if (filtered.length >= limit) break;
+    }
+
+    return filtered;
+}
