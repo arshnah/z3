@@ -1,4 +1,6 @@
 <script lang="ts">
+    import { afterNavigate, goto } from "$app/navigation";
+    import { page } from "$app/state";
     import Icon from "$lib/components/Icon.svelte";
     import Cover from "$lib/components/Cover.svelte";
     import TrackList from "$lib/components/TrackList.svelte";
@@ -27,14 +29,33 @@
         { label: "Rock", q: "classic rock", hue: 0, icon: "guitar" },
     ];
 
+    afterNavigate(({ to }) => {
+        if (!to || to.url.pathname !== "/music/search") return;
+        const query = to.url.searchParams.get("q")?.trim() ?? "";
+        const provider = to.url.searchParams.get("provider") === "js" ? "js" : "yt";
+        searchState.provider = provider;
+        if (!query) {
+            searchState.clear();
+            return;
+        }
+        searchState.query = query;
+        void searchState.run(query);
+    });
+
     function search(q: string) {
-        searchState.query = q;
-        searchState.run();
+        const params = new URLSearchParams({ q, provider: searchState.provider });
+        const target = `/music/search?${params}`;
+        if (page.url.pathname === "/music/search" && page.url.search === `?${params}`) {
+            void searchState.run(q);
+        } else {
+            void goto(target);
+        }
     }
 
     const results = $derived(searchState.results);
     const artists = $derived(searchState.artists);
     const albums = $derived(searchState.albums);
+    const playlists = $derived(searchState.playlists);
     const top = $derived(results[0]);
     function playbackTrack(track: (typeof results)[number]) {
         return settingsState.preferLocalSearchResults ? libraryState.findLocalTrack(track) ?? track : track;
@@ -46,6 +67,13 @@
         id: `search:${searchState.lastQuery}`,
         name: `Search · “${searchState.lastQuery}”`,
         tracks: results.map(playbackTrack),
+        createdAt: 0,
+        isProtected: true,
+    });
+    const recommendationsContext = $derived<Playlist>({
+        id: `search-recommendations:${searchState.lastQuery}`,
+        name: `Recommended · “${searchState.lastQuery}”`,
+        tracks: searchState.recommendations,
         createdAt: 0,
         isProtected: true,
     });
@@ -65,7 +93,7 @@
             <div class="skeleton" style="height:340px;border-radius:28px"></div>
             <div class="rows">{#each Array(6) as _}<div class="skeleton" style="height:64px;border-radius:20px"></div>{/each}</div>
         </div>
-    {:else if results.length && top}
+    {:else if results.length || artists.length || albums.length || playlists.length}
         <header class="results-head">
             <span class="kicker"><Icon name="search" /> Results</span>
             <h1 class="page-title">“{searchState.lastQuery}”</h1>
@@ -91,6 +119,7 @@
             </section>
         {/if}
 
+        {#if results.length && top}
         <div class="results-grid" class:stale={searchState.loading}>
             <!-- svelte-ignore a11y_click_events_have_key_events -->
             <div
@@ -141,6 +170,56 @@
                 <TrackList tracks={results} showAlbum={true} onplay={(i) => playTrack(playbackTrack(results[i]))} />
             </div>
         </div>
+        {/if}
+
+        {#if results.length}
+            <section class="section search-recommendations">
+                <div class="section-head">
+                    <div>
+                        <h2 class="section-title">Recommended for this search</h2>
+                        <span class="section-sub">More songs based on “{searchState.lastQuery}”</span>
+                    </div>
+                    {#if searchState.recommendationsLoading}
+                        <span class="section-sub">Finding songs…</span>
+                    {/if}
+                </div>
+                {#if searchState.recommendationsError && !searchState.recommendations.length}
+                    <div class="recommendation-error">
+                        <span class="muted">{searchState.recommendationsError}</span>
+                        <button class="btn btn-ghost" onclick={() => searchState.run()}>Retry</button>
+                    </div>
+                {:else if searchState.recommendations.length}
+                    <div class="list">
+                        <div class="list-actions">
+                            <button class="chip" onclick={() => playPlaylist(recommendationsContext, 0)}>
+                                <Icon name="play" /> Play all
+                            </button>
+                            <button
+                                class="chip"
+                                onclick={() => {
+                                    searchState.recommendations.forEach((song) => addToQueue(playbackTrack(song)));
+                                    toasts.success(`Queued ${searchState.recommendations.length} recommendations`);
+                                }}
+                            ><Icon name="list-end" /> Queue all</button>
+                        </div>
+                        <TrackList
+                            tracks={searchState.recommendations}
+                            showAlbum={true}
+                            onplay={(i) => playTrack(playbackTrack(searchState.recommendations[i]))}
+                        />
+                    </div>
+                    {#if searchState.recommendationsError}
+                        <p class="muted">Some recommendations couldn’t be loaded: {searchState.recommendationsError}</p>
+                    {/if}
+                {:else if searchState.recommendationsLoading}
+                    <div class="rows">
+                        {#each Array(4) as _}<div class="skeleton" style="height:64px;border-radius:20px"></div>{/each}
+                    </div>
+                {:else}
+                    <p class="muted">No extra recommendations found for this search yet.</p>
+                {/if}
+            </section>
+        {/if}
 
         {#if albums.length}
             <section class="section">
@@ -153,6 +232,31 @@
                             title={col.title}
                             artists={col.artists}
                             subtitle={col.year ?? (col.artists.length ? "" : col.subtitle ?? "")}
+                            providerHint={searchState.provider}
+                            thumbnails={col.thumbnails}
+                            index={i}
+                            playing={playerState.currentPlaylist?.id === `collection:${col.id}`}
+                            paused={playerState.paused}
+                            onclick={() => openCollection(col, col.artists[0]?.name)}
+                            onplay={() => playCollection(col)}
+                            oncontextmenu={(e) => ui.openMenu(e, collectionMenu(col))}
+                        />
+                    {/each}
+                </div>
+            </section>
+        {/if}
+
+        {#if playlists.length}
+            <section class="section">
+                <div class="section-head">
+                    <h2 class="section-title">Public playlists</h2>
+                </div>
+                <div class="shelf">
+                    {#each playlists as col, i (col.id + ":" + i)}
+                        <MediaCard
+                            title={col.title}
+                            subtitle={col.subtitle ?? "Playlist"}
+                            artists={col.artists}
                             providerHint={searchState.provider}
                             thumbnails={col.thumbnails}
                             index={i}
@@ -188,6 +292,10 @@
         {/if}
 
         <section class="section">
+            <div class="section-head">
+                <h2 class="section-title">Browse moods</h2>
+                <a class="section-sub link" href="/music/genres">Genres & playlists</a>
+            </div>
             <div class="moods">
                 {#each moods as m, i}
                     <button class="mood" style:--h={m.hue} style:animation-delay="{i * 40}ms" onclick={() => search(m.q)}>

@@ -47,10 +47,18 @@
 
     function submit(q?: string) {
         if (q !== undefined) searchState.query = q;
+        const query = searchState.query.trim();
+        if (!query) return;
         showSuggestions = false;
         highlighted = -1;
         input?.blur();
-        searchState.run();
+        const params = new URLSearchParams({ q: query, provider: searchState.provider });
+        const target = `/music/search?${params}`;
+        if (page.url.pathname === "/music/search" && page.url.search === `?${params}`) {
+            void searchState.run(query);
+        } else {
+            void goto(target);
+        }
     }
 
     function onKey(e: KeyboardEvent) {
@@ -123,7 +131,7 @@
                             <Icon name="x" />
                         </button>
                     {/if}
-                    <select class="provider" bind:value={searchState.provider} onchange={() => searchState.query.trim() && searchState.run()} title="Source">
+                    <select class="provider" bind:value={searchState.provider} onchange={() => searchState.query.trim() && submit()} title="Source">
                         <option value="yt">YouTube Music</option>
                         <option value="js">JioSaavn</option>
                     </select>
