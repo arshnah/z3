@@ -13,6 +13,9 @@ import type {
 } from './schema';
 import { musicText, youtubeArtists } from './music-metadata';
 import { comparableText } from '../../electron/lib/lyricsfile';
+import { ytSearchItems } from './youtube-search-results';
+
+export { ytSearchItems } from './youtube-search-results';
 
 type YtMusicLike = {
     search(query: string, options?: { type?: 'song' | 'video' | 'album' | 'playlist' | 'artist' }): Promise<any>;
@@ -219,7 +222,7 @@ export async function searchMusicExtras(
 
     const artists: Artist[] = [];
     if (artRes.status === 'fulfilled') {
-        for (const item of artRes.value?.artists?.contents ?? []) {
+        for (const item of ytSearchItems(artRes.value, 'artist', 'artists')) {
             const rawId = item?.id || item?.endpoint?.payload?.browseId;
             const name = musicText(item?.name || item?.title?.toString?.() || '').trim();
             if (!rawId || !name) continue;
@@ -234,7 +237,7 @@ export async function searchMusicExtras(
 
     const albums: CollectionSummary[] = [];
     if (albRes.status === 'fulfilled') {
-        for (const item of albRes.value?.albums?.contents ?? []) {
+        for (const item of ytSearchItems(albRes.value, 'album', 'albums')) {
             const col = ytItemToCollection(item, 'album');
             if (col) albums.push(col);
         }
@@ -242,7 +245,7 @@ export async function searchMusicExtras(
 
     const playlists: CollectionSummary[] = [];
     if (playlistRes.status === 'fulfilled') {
-        for (const item of playlistRes.value?.playlists?.contents ?? []) {
+        for (const item of ytSearchItems(playlistRes.value, 'playlist', 'playlists')) {
             const col = ytItemToCollection(item, 'playlist');
             if (col) playlists.push(col);
         }
@@ -271,7 +274,7 @@ export async function searchMusicPlaylists(
     if (provider !== 'yt') throw new Error(`Provider '${provider}' not supported for playlist search.`);
     const yt = await getYt();
     const result = await yt.search(query, { type: 'playlist' });
-    return (result?.playlists?.contents ?? [])
+    return ytSearchItems(result, 'playlist', 'playlists')
         .map((item: any) => ytItemToCollection(item, 'playlist'))
         .filter((collection: CollectionSummary | null): collection is CollectionSummary => collection !== null)
         .slice(0, 12);
@@ -290,9 +293,22 @@ export async function searchMusicAlbums(
     if (provider !== 'yt') throw new Error(`Provider '${provider}' not supported for album search.`);
     const yt = await getYt();
     const result = await yt.search(query, { type: 'album' });
-    return (result?.albums?.contents ?? [])
+    return ytSearchItems(result, 'album', 'albums')
         .map((item: any) => ytItemToCollection(item, 'album'))
         .filter((collection: CollectionSummary | null): collection is CollectionSummary => collection !== null)
+        .slice(0, 12);
+}
+
+export async function searchMusicVideos(
+    getYt: () => Promise<YtMusicLike>,
+    downloaded: Set<string>,
+    query: string,
+): Promise<Song[]> {
+    const yt = await getYt();
+    const result = await yt.search(query, { type: 'video' });
+    return ytSearchItems(result, 'video', 'videos')
+        .map((item: any) => ytToSong(item, downloaded))
+        .filter((song: Song | null): song is Song => song !== null)
         .slice(0, 12);
 }
 

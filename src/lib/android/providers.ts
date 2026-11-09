@@ -10,6 +10,8 @@ import {
     searchMusicAlbums,
     searchMusicExtras,
     searchMusicPlaylists,
+    searchMusicVideos,
+    ytSearchItems,
     ytToSong,
 } from '../music-catalog';
 import { fetchLrclib } from '../../../electron/lib/lyricsfile';
@@ -55,7 +57,7 @@ export async function search(query: string, provider: MusicProvider): Promise<So
     if (provider === 'js') return (await Saavn.search({ query, limit: 30 })).results.map((s) => saavnToSong(s, empty));
     if (provider !== 'yt') throw new Error('Choose YouTube Music or JioSaavn to search.');
     const results = await (await yt()).music.search(query, { type: 'song' });
-    return (results.songs?.contents ?? [])
+    return ytSearchItems(results, 'song', 'songs')
         .map((s) => ytToSong(s, empty))
         .filter((s): s is Song => s !== null);
 }
@@ -70,6 +72,10 @@ export async function searchPlaylists(query: string, provider: MusicProvider) {
 
 export async function searchAlbums(query: string, provider: MusicProvider) {
     return searchMusicAlbums(async () => (await yt()).music, query, provider);
+}
+
+export async function searchVideos(query: string) {
+    return searchMusicVideos(async () => (await yt()).music, new Set<string>(), query);
 }
 
 export async function artist(idOrQuery: string, nameHint?: string, downloaded = new Set<string>()): Promise<ArtistDetails> {

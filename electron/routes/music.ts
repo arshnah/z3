@@ -42,6 +42,8 @@ import {
     searchMusicAlbums,
     searchMusicExtras,
     searchMusicPlaylists,
+    searchMusicVideos,
+    ytSearchItems,
     ytToSong,
 } from '../../src/lib/music-catalog';
 
@@ -1037,7 +1039,7 @@ export const routes = {
                 await init();
                 const res = await yt.music.search(query, { type: 'song' });
 
-                return (res.songs?.contents || [])
+                return ytSearchItems(res, 'song', 'songs')
                     .map((song) => ytToSong(song, downloaded))
                     .filter((s): s is Song => s !== null);
             }
@@ -1062,6 +1064,12 @@ export const routes = {
 
     async musicSearchAlbums(query: string, provider: MusicProvider) {
         return searchMusicAlbums(async () => (await init(), yt.music), query, provider);
+    },
+
+    async musicSearchVideos(query: string) {
+        await ensureStorage();
+        const downloaded = new Set((await metadata.all()).filter((r) => r.file).map((r) => r.id));
+        return searchMusicVideos(async () => (await init(), yt.music), downloaded, query);
     },
 
     async musicArtist(idOrQuery: string, nameHint?: string): Promise<ArtistDetails> {
