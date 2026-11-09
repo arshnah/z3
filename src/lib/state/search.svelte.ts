@@ -1,8 +1,6 @@
 import { browser } from "$app/environment";
 import { client } from "$lib/ephaptic";
-import { filterPlaylistRecommendations, filterRecommendationsByArtist } from "$lib/playlist-recommendations";
 import type { Artist, CollectionSummary, MusicProvider, Song } from "$lib/schema";
-import { slimSong } from "$lib/utils";
 
 const RECENT_KEY = "zeta:recent-searches";
 
@@ -15,9 +13,9 @@ class SearchStore {
     artists = $state<Artist[]>([]);
     albums = $state<CollectionSummary[]>([]);
     playlists = $state<CollectionSummary[]>([]);
-    recommendations = $state<Song[]>([]);
-    recommendationsLoading = $state(false);
-    recommendationsError = $state("");
+    videos = $state<Song[]>([]);
+    videosLoading = $state(false);
+    videosError = $state("");
     loading = $state(false);
     error = $state("");
     recent = $state<string[]>(browser ? JSON.parse(localStorage.getItem(RECENT_KEY) || "[]") : []);
@@ -32,9 +30,9 @@ class SearchStore {
         this.artists = [];
         this.albums = [];
         this.playlists = [];
-        this.recommendations = [];
-        this.recommendationsLoading = false;
-        this.recommendationsError = "";
+        this.videos = [];
+        this.videosLoading = false;
+        this.videosError = "";
         this.loading = false;
         this.error = "";
     }
@@ -44,9 +42,9 @@ class SearchStore {
         if (!q) return;
         this.query = q;
         this.error = "";
-        this.recommendations = [];
-        this.recommendationsError = "";
-        this.recommendationsLoading = false;
+        this.videos = [];
+        this.videosError = "";
+        this.videosLoading = false;
         this.loading = true;
         const seq = ++this.seq;
         const provider = $state.snapshot(this.provider);
@@ -82,7 +80,7 @@ class SearchStore {
             this.playlists = [...new Map(playlists.map((playlist) => [playlist.id, playlist])).values()].slice(0, 12);
             this.lastQuery = q;
             this.remember(q);
-            if (results.length) void this.loadRecommendations(results, seq);
+            if (provider === "yt") void this.loadVideos(q, seq);
         } catch (err: any) {
             if (seq === this.seq) this.error = err?.message ?? String(err);
         } finally {
@@ -90,26 +88,16 @@ class SearchStore {
         }
     }
 
-    private async loadRecommendations(results: Song[], seq: number) {
-        this.recommendationsLoading = true;
+    private async loadVideos(query: string, seq: number) {
+        this.videosLoading = true;
         try {
-            const excludedIds = results.map((song) => song.id);
-            const seeds = results.slice(0, 4);
-            const batches = await Promise.allSettled(
-                seeds.map((seed) => client.musicRadio(slimSong(seed), excludedIds)),
-            );
+            const videos = await client.musicSearchVideos(query);
             if (seq !== this.seq) return;
-            const songs = batches.flatMap((batch) => batch.status === "fulfilled" ? batch.value : []);
-            this.recommendations = filterRecommendationsByArtist(
-                filterPlaylistRecommendations(songs, results, 40),
-                16,
-            );
-            const failure = batches.find((batch) => batch.status === "rejected");
-            if (failure?.status === "rejected") this.recommendationsError = failure.reason?.message ?? String(failure.reason);
+            this.videos = videos;
         } catch (err) {
-            if (seq === this.seq) this.recommendationsError = err instanceof Error ? err.message : String(err);
+            if (seq === this.seq) this.videosError = err instanceof Error ? err.message : String(err);
         } finally {
-            if (seq === this.seq) this.recommendationsLoading = false;
+            if (seq === this.seq) this.videosLoading = false;
         }
     }
 

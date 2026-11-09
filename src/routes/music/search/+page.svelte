@@ -6,6 +6,7 @@
     import TrackList from "$lib/components/TrackList.svelte";
     import MediaCard from "$lib/components/MediaCard.svelte";
     import ArtistLinks from "$lib/components/ArtistLinks.svelte";
+    import { client } from "$lib/ephaptic";
     import { searchState } from "$lib/state/search.svelte";
     import { playerState, playTrack, playPlaylist, togglePlay, addToQueue } from "$lib/state/player.svelte";
     import { ui } from "$lib/state/ui.svelte";
@@ -70,13 +71,15 @@
         createdAt: 0,
         isProtected: true,
     });
-    const recommendationsContext = $derived<Playlist>({
-        id: `search-recommendations:${searchState.lastQuery}`,
-        name: `Recommended · “${searchState.lastQuery}”`,
-        tracks: searchState.recommendations,
-        createdAt: 0,
-        isProtected: true,
-    });
+
+    async function watchVideo(song: (typeof searchState.videos)[number]) {
+        try {
+            if (!song.id.startsWith("yt:")) throw new Error("This video cannot be opened.");
+            await client.openMusicVideo(song.id.slice(3));
+        } catch (error) {
+            toasts.error(error);
+        }
+    }
 </script>
 
 <div class="page">
@@ -93,7 +96,7 @@
             <div class="skeleton" style="height:340px;border-radius:28px"></div>
             <div class="rows">{#each Array(6) as _}<div class="skeleton" style="height:64px;border-radius:20px"></div>{/each}</div>
         </div>
-    {:else if results.length || artists.length || albums.length || playlists.length}
+    {:else if results.length || artists.length || albums.length || playlists.length || searchState.videos.length || searchState.videosLoading}
         <header class="results-head">
             <span class="kicker"><Icon name="search" /> Results</span>
             <h1 class="page-title">“{searchState.lastQuery}”</h1>
@@ -172,51 +175,37 @@
         </div>
         {/if}
 
-        {#if results.length}
-            <section class="section search-recommendations">
+        {#if searchState.provider === "yt"}
+            <section class="section">
                 <div class="section-head">
                     <div>
-                        <h2 class="section-title">Recommended for this search</h2>
-                        <span class="section-sub">More songs based on “{searchState.lastQuery}”</span>
+                        <h2 class="section-title">Music videos</h2>
+                        <span class="section-sub">Watch on YouTube</span>
                     </div>
-                    {#if searchState.recommendationsLoading}
-                        <span class="section-sub">Finding songs…</span>
+                    {#if searchState.videosLoading}
+                        <span class="section-sub">Finding videos…</span>
                     {/if}
                 </div>
-                {#if searchState.recommendationsError && !searchState.recommendations.length}
+                {#if searchState.videos.length}
+                    <div class="shelf">
+                        {#each searchState.videos as video, i (video.id)}
+                            <MediaCard
+                                title={video.title}
+                                artists={video.artists}
+                                subtitle="Watch on YouTube"
+                                providerHint="yt"
+                                thumbnails={video.thumbnails}
+                                index={i}
+                                onclick={() => watchVideo(video)}
+                                onplay={() => watchVideo(video)}
+                            />
+                        {/each}
+                    </div>
+                {:else if searchState.videosError}
                     <div class="recommendation-error">
-                        <span class="muted">{searchState.recommendationsError}</span>
+                        <span class="muted">{searchState.videosError}</span>
                         <button class="btn btn-ghost" onclick={() => searchState.run()}>Retry</button>
                     </div>
-                {:else if searchState.recommendations.length}
-                    <div class="list">
-                        <div class="list-actions">
-                            <button class="chip" onclick={() => playPlaylist(recommendationsContext, 0)}>
-                                <Icon name="play" /> Play all
-                            </button>
-                            <button
-                                class="chip"
-                                onclick={() => {
-                                    searchState.recommendations.forEach((song) => addToQueue(playbackTrack(song)));
-                                    toasts.success(`Queued ${searchState.recommendations.length} recommendations`);
-                                }}
-                            ><Icon name="list-end" /> Queue all</button>
-                        </div>
-                        <TrackList
-                            tracks={searchState.recommendations}
-                            showAlbum={true}
-                            onplay={(i) => playTrack(playbackTrack(searchState.recommendations[i]))}
-                        />
-                    </div>
-                    {#if searchState.recommendationsError}
-                        <p class="muted">Some recommendations couldn’t be loaded: {searchState.recommendationsError}</p>
-                    {/if}
-                {:else if searchState.recommendationsLoading}
-                    <div class="rows">
-                        {#each Array(4) as _}<div class="skeleton" style="height:64px;border-radius:20px"></div>{/each}
-                    </div>
-                {:else}
-                    <p class="muted">No extra recommendations found for this search yet.</p>
                 {/if}
             </section>
         {/if}

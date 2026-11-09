@@ -7,15 +7,16 @@
     import Icon from "$lib/components/Icon.svelte";
     import Cover from "$lib/components/Cover.svelte";
     import EqBars from "$lib/components/EqBars.svelte";
+    import { createPlaylistWith, openArtist, openCollection } from "$lib/actions";
     import { page } from "$app/state";
     import { goto } from "$app/navigation";
     import { libraryState, FAVOURITES_ID } from "$lib/state/library.svelte";
-    import { playerState } from "$lib/state/player.svelte";
+    import { playerState, playTrack } from "$lib/state/player.svelte";
     import { searchState } from "$lib/state/search.svelte";
     import { ui } from "$lib/state/ui.svelte";
     import { liquidGlass } from "$lib/liquid-glass";
-    import { createPlaylistWith } from "$lib/actions";
     import { debounce } from "$lib/utils";
+    import type { Artist, CollectionSummary, Song } from "$lib/schema";
     import { fly, scale } from "svelte/transition";
     import { tick } from "svelte";
     import { isAndroid } from '$lib/platform';
@@ -26,6 +27,12 @@
 
     let input = $state<HTMLInputElement>();
     let suggestions = $state<string[]>([]);
+    type QuickItem =
+        | { kind: "song"; value: Song }
+        | { kind: "artist"; value: Artist }
+        | { kind: "collection"; value: CollectionSummary };
+    let quickItems = $state<QuickItem[]>([]);
+    let suggestionsLoading = $state(false);
     let showSuggestions = $state(false);
     let highlighted = $state(-1);
     let libraryOpen = $state(false);
@@ -35,15 +42,39 @@
         if (onSearch) tick().then(() => !searchState.results.length && input?.focus());
     });
 
-    const fetchSuggestions = debounce(async (q: string) => {
-        if (!q.trim()) return (suggestions = []);
-        try {
-            const s = await client.musicSearchSuggestions(q);
-            if (q === searchState.query) suggestions = s.slice(0, 7);
-        } catch {
+    const fetchSuggestions = debounce(async (q: string, provider: typeof searchState.provider) => {
+        if (!q.trim()) {
             suggestions = [];
+            quickItems = [];
+            suggestionsLoading = false;
+            return;
         }
-    }, 200);
+        suggestionsLoading = true;
+        const [textResults, songResults, extraResults] = await Promise.allSettled([
+            client.musicSearchSuggestions(q),
+            client.musicSearch(q, provider),
+            client.musicSearchExtras(q, provider),
+        ]);
+        if (q !== searchState.query || provider !== searchState.provider) return;
+        suggestions = textResults.status === "fulfilled" ? textResults.value.slice(0, 5) : [];
+        const songs = songResults.status === "fulfilled" ? songResults.value.slice(0, 4) : [];
+        const extras = extraResults.status === "fulfilled" ? extraResults.value : { artists: [], albums: [], playlists: [] };
+        quickItems = [
+            ...songs.map((value) => ({ kind: "song" as const, value })),
+            ...extras.artists.slice(0, 2).map((value) => ({ kind: "artist" as const, value })),
+            ...extras.albums.slice(0, 2).map((value) => ({ kind: "collection" as const, value })),
+            ...extras.playlists.slice(0, 2).map((value) => ({ kind: "collection" as const, value })),
+        ];
+        suggestionsLoading = false;
+    }, 320);
+
+    function selectQuickItem(item: QuickItem) {
+        showSuggestions = false;
+        input?.blur();
+        if (item.kind === "song") playTrack(item.value);
+        else if (item.kind === "artist") openArtist(item.value, searchState.provider);
+        else openCollection(item.value, item.value.artists[0]?.name);
+    }
 
     function submit(q?: string) {
         if (q !== undefined) searchState.query = q;
@@ -67,10 +98,14 @@
             input?.blur();
             return;
         }
-        if (!showSuggestions || !suggestions.length) return;
-        if (e.key === "ArrowDown") highlighted = (highlighted + 1) % suggestions.length;
-        else if (e.key === "ArrowUp") highlighted = highlighted <= 0 ? suggestions.length - 1 : highlighted - 1;
-        else if (e.key === "Enter" && highlighted >= 0) submit(suggestions[highlighted]);
+        const count = quickItems.length + suggestions.length;
+        if (!showSuggestions || !count) return;
+        if (e.key === "ArrowDown") highlighted = (highlighted + 1) % count;
+        else if (e.key === "ArrowUp") highlighted = highlighted <= 0 ? count - 1 : highlighted - 1;
+        else if (e.key === "Enter" && highlighted >= 0) {
+            if (highlighted < quickItems.length) selectQuickItem(quickItems[highlighted]);
+            else submit(suggestions[highlighted - quickItems.length]);
+        }
         else return;
         e.preventDefault();
     }
@@ -118,16 +153,28 @@
                         oninput={() => {
                             showSuggestions = true;
                             highlighted = -1;
-                            fetchSuggestions(searchState.query);
+                            suggestions = [];
+                            quickItems = [];
+                            suggestionsLoading = !!searchState.query.trim();
+                            fetchSuggestions(searchState.query, searchState.provider);
                         }}
-                        onfocus={() => (showSuggestions = true)}
+                        onfocus={() => {
+                            showSuggestions = true;
+                            if (searchState.query.trim()) fetchSuggestions(searchState.query, searchState.provider);
+                        }}
                         onblur={() => setTimeout(() => (showSuggestions = false), 150)}
                         onkeydown={onKey}
                     />
                     {#if searchState.loading}
                         <span class="spin subtle"><Icon name="loader-circle" /></span>
                     {:else if searchState.query}
-                        <button type="button" class="icon-btn sm" aria-label="Clear" onclick={() => { searchState.query = ""; suggestions = []; input?.focus(); }}>
+                        <button type="button" class="icon-btn sm" aria-label="Clear" onclick={() => {
+                            searchState.query = "";
+                            suggestions = [];
+                            quickItems = [];
+                            suggestionsLoading = false;
+                            input?.focus();
+                        }}>
                             <Icon name="x" />
                         </button>
                     {/if}
@@ -175,10 +222,44 @@
         </div>
     </nav>
 
-    {#if onSearch && showSuggestions && searchState.query && suggestions.length}
+    {#if onSearch && showSuggestions && searchState.query && (quickItems.length || suggestions.length || suggestionsLoading)}
         <div class="suggestions glass" transition:fly={{ y: -8, duration: 180 }}>
+            {#if suggestionsLoading && !quickItems.length && !suggestions.length}
+                <div class="suggestions-loading"><Icon name="loader-circle" /> Finding songs, artists, and albums…</div>
+            {/if}
+            {#each quickItems as item, i}
+                {@const title = item.kind === "song"
+                    ? item.value.title
+                    : item.kind === "artist"
+                      ? item.value.name
+                      : item.value.title}
+                {@const subtitle = item.kind === "song"
+                    ? item.value.artists.map((artist) => artist.name).join(", ")
+                    : item.kind === "artist"
+                      ? item.value.subtitle ?? "Artist"
+                      : item.value.subtitle ?? (item.value.kind === "playlist" ? "Playlist" : "Album")}
+                {@const thumbnails = item.value.thumbnails}
+                <button
+                    class="sugg quick-sugg"
+                    class:hl={i === highlighted}
+                    onmousedown={(e) => e.preventDefault()}
+                    onclick={() => selectQuickItem(item)}
+                >
+                    <Cover {thumbnails} {title} size={36} radius={item.kind === "artist" ? "50%" : "9px"} />
+                    <span class="quick-copy">
+                        <strong class="ellipsis">{title}</strong>
+                        <small class="ellipsis">{subtitle}</small>
+                    </span>
+                    <span class="quick-type">{item.kind === "collection" ? item.value.kind : item.kind}</span>
+                </button>
+            {/each}
             {#each suggestions as s, i}
-                <button class="sugg" class:hl={i === highlighted} onmousedown={(e) => e.preventDefault()} onclick={() => submit(s)}>
+                <button
+                    class="sugg"
+                    class:hl={quickItems.length + i === highlighted}
+                    onmousedown={(e) => e.preventDefault()}
+                    onclick={() => submit(s)}
+                >
                     <Icon name="search" />
                     <span class="ellipsis">{s}</span>
                     <Icon name="corner-down-left" />
@@ -409,10 +490,28 @@
     .suggestions {
         margin-top: 10px;
         width: min(560px, 90vw);
+        max-height: min(70vh, 620px);
+        overflow-y: auto;
         padding: 6px;
         border-radius: 22px;
         background: rgb(16 13 24 / 0.85);
         box-shadow: var(--shadow-lg);
+    }
+    .suggestions-loading {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 12px 14px;
+        color: var(--text-2);
+        font-size: 13px;
+    }
+    .suggestions-loading :global(svg) {
+        width: 15px;
+        height: 15px;
+        animation: spin 1s linear infinite;
+    }
+    @keyframes spin {
+        to { transform: rotate(360deg); }
     }
     .sugg {
         display: flex;
@@ -433,6 +532,36 @@
     }
     .sugg span {
         flex: 1;
+    }
+    .quick-sugg {
+        height: 52px;
+        gap: 10px;
+    }
+    .quick-sugg :global(.cover) {
+        flex: 0 0 36px;
+    }
+    .quick-copy {
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        min-width: 0;
+        gap: 2px;
+    }
+    .quick-copy strong {
+        color: var(--text);
+        font-size: 13px;
+        font-weight: 650;
+    }
+    .quick-copy small {
+        color: var(--text-3);
+        font-size: 11px;
+        font-weight: 500;
+    }
+    .quick-type {
+        flex: 0 0 auto !important;
+        color: var(--text-3);
+        font-size: 10px;
+        text-transform: capitalize;
     }
     .sugg:hover,
     .sugg.hl {
