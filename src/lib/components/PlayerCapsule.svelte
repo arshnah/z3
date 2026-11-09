@@ -25,7 +25,6 @@
     } from "$lib/state/player.svelte";
     import { libraryState } from "$lib/state/library.svelte";
     import { ui, type MenuItem } from "$lib/state/ui.svelte";
-    import { liquidGlass } from "$lib/liquid-glass";
     import { toasts } from "$lib/state/toast.svelte";
     import { trackMenu } from "$lib/actions";
     import { analyser } from "$lib/audio/analyser";
@@ -103,7 +102,6 @@
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div
     class="capsule"
-    use:liquidGlass={{ enabled: ui.liquidGlass, depth: 14, blur: 10 }}
     class:expanded
     class:empty={!track}
     class:playing={track && !playerState.paused}
