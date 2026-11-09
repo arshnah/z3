@@ -7,16 +7,17 @@
     import Icon from "$lib/components/Icon.svelte";
     import Cover from "$lib/components/Cover.svelte";
     import EqBars from "$lib/components/EqBars.svelte";
+    import { createPlaylistWith, openArtist, openCollection } from "$lib/actions";
     import { page } from "$app/state";
     import { goto } from "$app/navigation";
     import { libraryState, FAVOURITES_ID } from "$lib/state/library.svelte";
-    import { playerState } from "$lib/state/player.svelte";
+    import { playerState, playTrack } from "$lib/state/player.svelte";
     import { searchState } from "$lib/state/search.svelte";
     import { ui } from "$lib/state/ui.svelte";
     import { liquidGlass } from "$lib/liquid-glass";
-    import { createPlaylistWith } from "$lib/actions";
     import { debounce } from "$lib/utils";
-    import { fly, scale } from "svelte/transition";
+    import type { Artist, CollectionSummary, Song } from "$lib/schema";
+    import { fly } from "svelte/transition";
     import { tick } from "svelte";
     import { isAndroid } from '$lib/platform';
 
@@ -26,31 +27,79 @@
 
     let input = $state<HTMLInputElement>();
     let suggestions = $state<string[]>([]);
+    type QuickItem =
+        | { kind: "song"; value: Song }
+        | { kind: "artist"; value: Artist }
+        | { kind: "collection"; value: CollectionSummary };
+    let quickItems = $state<QuickItem[]>([]);
+    let suggestionsLoading = $state(false);
     let showSuggestions = $state(false);
     let highlighted = $state(-1);
     let libraryOpen = $state(false);
     let libraryTimer: ReturnType<typeof setTimeout>;
+    const normalizeMatch = (value: string) => value.normalize("NFD").replace(/\p{M}/gu, "").toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
+    const exactSong = $derived.by(() => {
+        const query = normalizeMatch(searchState.query);
+        if (!query) return undefined;
+        const matches = quickItems.filter((item): item is Extract<QuickItem, { kind: "song" }> =>
+            item.kind === "song" && normalizeMatch(item.value.title) === query
+        );
+        return matches.length === 1 ? matches[0] : undefined;
+    });
+    const otherQuickItems = $derived(quickItems.filter((item) => item !== exactSong));
 
     $effect(() => {
         if (onSearch) tick().then(() => !searchState.results.length && input?.focus());
     });
 
-    const fetchSuggestions = debounce(async (q: string) => {
-        if (!q.trim()) return (suggestions = []);
-        try {
-            const s = await client.musicSearchSuggestions(q);
-            if (q === searchState.query) suggestions = s.slice(0, 7);
-        } catch {
+    const fetchSuggestions = debounce(async (q: string, provider: typeof searchState.provider) => {
+        if (!q.trim()) {
             suggestions = [];
+            quickItems = [];
+            suggestionsLoading = false;
+            return;
         }
-    }, 200);
+        suggestionsLoading = true;
+        const [textResults, songResults, extraResults] = await Promise.allSettled([
+            client.musicSearchSuggestions(q),
+            client.musicSearch(q, provider),
+            client.musicSearchExtras(q, provider),
+        ]);
+        if (q !== searchState.query || provider !== searchState.provider) return;
+        suggestions = textResults.status === "fulfilled" ? textResults.value.slice(0, 5) : [];
+        const songs = songResults.status === "fulfilled" ? songResults.value.slice(0, 4) : [];
+        const extras = extraResults.status === "fulfilled" ? extraResults.value : { artists: [], albums: [], playlists: [] };
+        quickItems = [
+            ...songs.map((value) => ({ kind: "song" as const, value })),
+            ...extras.artists.slice(0, 2).map((value) => ({ kind: "artist" as const, value })),
+            ...extras.albums.slice(0, 2).map((value) => ({ kind: "collection" as const, value })),
+            ...extras.playlists.slice(0, 2).map((value) => ({ kind: "collection" as const, value })),
+        ];
+        suggestionsLoading = false;
+    }, 320);
+
+    function selectQuickItem(item: QuickItem) {
+        showSuggestions = false;
+        input?.blur();
+        if (item.kind === "song") playTrack(item.value);
+        else if (item.kind === "artist") openArtist(item.value, searchState.provider);
+        else openCollection(item.value, item.value.artists[0]?.name);
+    }
 
     function submit(q?: string) {
         if (q !== undefined) searchState.query = q;
+        const query = searchState.query.trim();
+        if (!query) return;
         showSuggestions = false;
         highlighted = -1;
         input?.blur();
-        searchState.run();
+        const params = new URLSearchParams({ q: query, provider: searchState.provider });
+        const target = `/music/search?${params}`;
+        if (page.url.pathname === "/music/search" && page.url.search === `?${params}`) {
+            void searchState.run(query);
+        } else {
+            void goto(target);
+        }
     }
 
     function onKey(e: KeyboardEvent) {
@@ -59,10 +108,18 @@
             input?.blur();
             return;
         }
-        if (!showSuggestions || !suggestions.length) return;
-        if (e.key === "ArrowDown") highlighted = (highlighted + 1) % suggestions.length;
-        else if (e.key === "ArrowUp") highlighted = highlighted <= 0 ? suggestions.length - 1 : highlighted - 1;
-        else if (e.key === "Enter" && highlighted >= 0) submit(suggestions[highlighted]);
+        const count = suggestions.length + otherQuickItems.length + (exactSong ? 1 : 0);
+        if (!showSuggestions || !count) return;
+        if (e.key === "ArrowDown") highlighted = (highlighted + 1) % count;
+        else if (e.key === "ArrowUp") highlighted = highlighted <= 0 ? count - 1 : highlighted - 1;
+        else if (e.key === "Enter" && highlighted >= 0) {
+            if (exactSong && highlighted === 0) selectQuickItem(exactSong);
+            else {
+                const index = highlighted - (exactSong ? 1 : 0);
+                if (index < suggestions.length) submit(suggestions[index]);
+                else selectQuickItem(otherQuickItems[index - suggestions.length]);
+            }
+        }
         else return;
         e.preventDefault();
     }
@@ -90,47 +147,54 @@
         <div class="items">
             <a href="/music" class="item" aria-label="Home" class:active={isActive("/music")}><Icon name="sparkles" /><span>Home</span></a>
 
-            {#if onSearch}
-                <form
-                    class="search"
-                    in:scale={{ start: 0.85, duration: 350, opacity: 0 }}
-                    onsubmit={(e) => {
-                        e.preventDefault();
-                        submit();
+            <form
+                class="search"
+                onsubmit={(e) => {
+                    e.preventDefault();
+                    submit();
+                }}
+            >
+                <Icon name="search" />
+                <input
+                    id="search-input"
+                    bind:this={input}
+                    bind:value={searchState.query}
+                    placeholder="Songs, artists, moods…"
+                    autocomplete="off"
+                    spellcheck="false"
+                    oninput={() => {
+                        showSuggestions = true;
+                        highlighted = -1;
+                        suggestions = [];
+                        quickItems = [];
+                        suggestionsLoading = !!searchState.query.trim();
+                        fetchSuggestions(searchState.query, searchState.provider);
                     }}
-                >
-                    <Icon name="search" />
-                    <input
-                        id="search-input"
-                        bind:this={input}
-                        bind:value={searchState.query}
-                        placeholder="Songs, artists, moods…"
-                        autocomplete="off"
-                        spellcheck="false"
-                        oninput={() => {
-                            showSuggestions = true;
-                            highlighted = -1;
-                            fetchSuggestions(searchState.query);
-                        }}
-                        onfocus={() => (showSuggestions = true)}
-                        onblur={() => setTimeout(() => (showSuggestions = false), 150)}
-                        onkeydown={onKey}
-                    />
-                    {#if searchState.loading}
-                        <span class="spin subtle"><Icon name="loader-circle" /></span>
-                    {:else if searchState.query}
-                        <button type="button" class="icon-btn sm" aria-label="Clear" onclick={() => { searchState.query = ""; suggestions = []; input?.focus(); }}>
-                            <Icon name="x" />
-                        </button>
-                    {/if}
-                    <select class="provider" bind:value={searchState.provider} onchange={() => searchState.query.trim() && searchState.run()} title="Source">
-                        <option value="yt">YouTube Music</option>
-                        <option value="js">JioSaavn</option>
-                    </select>
-                </form>
-            {:else}
-                <a href="/music/search" class="item" aria-label="Search"><Icon name="search" /><span>Search</span></a>
-            {/if}
+                    onfocus={() => {
+                        showSuggestions = true;
+                        if (searchState.query.trim()) fetchSuggestions(searchState.query, searchState.provider);
+                    }}
+                    onblur={() => setTimeout(() => (showSuggestions = false), 150)}
+                    onkeydown={onKey}
+                />
+                {#if searchState.loading}
+                    <span class="spin subtle"><Icon name="loader-circle" /></span>
+                {:else if searchState.query}
+                    <button type="button" class="icon-btn sm" aria-label="Clear" onclick={() => {
+                        searchState.query = "";
+                        suggestions = [];
+                        quickItems = [];
+                        suggestionsLoading = false;
+                        input?.focus();
+                    }}>
+                        <Icon name="x" />
+                    </button>
+                {/if}
+                <select class="provider" bind:value={searchState.provider} onchange={() => searchState.query.trim() && submit()} title="Source">
+                    <option value="yt">YouTube Music</option>
+                    <option value="js">JioSaavn</option>
+                </select>
+            </form>
 
             <!-- svelte-ignore a11y_no_static_element_interactions -->
             <div class="lib" onmouseenter={openLibrary} onmouseleave={closeLibrarySoon}>
@@ -167,18 +231,79 @@
         </div>
     </nav>
 
-    {#if onSearch && showSuggestions && searchState.query && suggestions.length}
+    {#if showSuggestions && searchState.query && (quickItems.length || suggestions.length || suggestionsLoading)}
         <div class="suggestions glass" transition:fly={{ y: -8, duration: 180 }}>
+            <div class="search-hints">
+                <span><kbd>↑</kbd><kbd>↓</kbd> Navigate</span>
+                <span><kbd>Enter</kbd> Search</span>
+            </div>
+            {#if suggestionsLoading && !quickItems.length && !suggestions.length}
+                <div class="suggestions-loading"><Icon name="loader-circle" /> Finding songs, artists, and albums…</div>
+            {/if}
+            {#if exactSong}
+                {@render quickRow(exactSong, 0)}
+            {/if}
             {#each suggestions as s, i}
-                <button class="sugg" class:hl={i === highlighted} onmousedown={(e) => e.preventDefault()} onclick={() => submit(s)}>
+                <button
+                    class="sugg"
+                    class:hl={i + (exactSong ? 1 : 0) === highlighted}
+                    onmousedown={(e) => e.preventDefault()}
+                    onclick={() => submit(s)}
+                >
                     <Icon name="search" />
                     <span class="ellipsis">{s}</span>
-                    <Icon name="corner-down-left" />
                 </button>
+            {/each}
+            {#if suggestions.length && otherQuickItems.length}
+                <div class="suggestion-divider">Top results</div>
+            {/if}
+            {#each otherQuickItems as item, i}
+                {@render quickRow(item, i + suggestions.length + (exactSong ? 1 : 0))}
             {/each}
         </div>
     {/if}
 </div>
+
+{#snippet quickRow(item: QuickItem, keyboardIndex: number)}
+    {@const title = item.kind === "song"
+        ? item.value.title
+        : item.kind === "artist"
+          ? item.value.name
+          : item.value.title}
+    {@const subtitle = item.kind === "song"
+        ? item.value.artists.map((artist) => artist.name).join(", ")
+        : item.kind === "artist"
+          ? item.value.subtitle ?? "Artist"
+          : item.value.subtitle ?? (item.value.kind === "playlist" ? "Playlist" : "Album")}
+    {@const thumbnails = item.value.thumbnails}
+    <div class="quick-row">
+        <button
+            class="sugg quick-sugg"
+            class:hl={keyboardIndex === highlighted}
+            onmousedown={(e) => e.preventDefault()}
+            onclick={() => selectQuickItem(item)}
+        >
+            <Cover {thumbnails} {title} size={36} radius={item.kind === "artist" ? "50%" : "9px"} />
+            <span class="quick-copy">
+                <strong class="ellipsis">{title}</strong>
+                <small class="ellipsis">{subtitle}</small>
+            </span>
+            <span class="quick-type">{item.kind === "collection" ? item.value.kind : item.kind}</span>
+        </button>
+        {#if item.kind === "song"}
+            <button
+                class="quick-add"
+                class:is-fav={libraryState.isFavourite(item.value.id)}
+                aria-label={libraryState.isFavourite(item.value.id) ? "Remove from Favourites" : "Add to Favourites"}
+                title={libraryState.isFavourite(item.value.id) ? "Remove from Favourites" : "Add to Favourites"}
+                onmousedown={(e) => e.preventDefault()}
+                onclick={() => libraryState.toggleFavourite(item.value)}
+            >
+                <Icon name={libraryState.isFavourite(item.value.id) ? "check" : "plus"} />
+            </button>
+        {/if}
+    </div>
+{/snippet}
 
 <style>
     .dock-wrap {
@@ -400,11 +525,59 @@
 
     .suggestions {
         margin-top: 10px;
-        width: min(560px, 90vw);
+        width: min(440px, 90vw);
+        max-height: min(70vh, 620px);
+        overflow-y: auto;
         padding: 6px;
         border-radius: 22px;
         background: rgb(16 13 24 / 0.85);
         box-shadow: var(--shadow-lg);
+    }
+    .search-hints {
+        display: flex;
+        justify-content: space-between;
+        padding: 7px 10px 9px;
+        border-bottom: 1px solid var(--border);
+        color: var(--text-3);
+        font-size: 11px;
+    }
+    .search-hints span {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+    }
+    .search-hints kbd {
+        min-width: 17px;
+        padding: 1px 4px;
+        border: 1px solid var(--border);
+        border-radius: 4px;
+        color: var(--text-2);
+        font: inherit;
+        text-align: center;
+    }
+    .suggestion-divider {
+        padding: 9px 12px 4px;
+        color: var(--text-3);
+        font-size: 10px;
+        font-weight: 650;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+    }
+    .suggestions-loading {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 12px 14px;
+        color: var(--text-2);
+        font-size: 13px;
+    }
+    .suggestions-loading :global(svg) {
+        width: 15px;
+        height: 15px;
+        animation: spin 1s linear infinite;
+    }
+    @keyframes spin {
+        to { transform: rotate(360deg); }
     }
     .sugg {
         display: flex;
@@ -425,6 +598,72 @@
     }
     .sugg span {
         flex: 1;
+    }
+    .quick-sugg {
+        height: 52px;
+        gap: 10px;
+        padding: 0 8px;
+    }
+    .quick-row {
+        display: flex;
+        align-items: center;
+        border-radius: 14px;
+        padding-right: 8px;
+    }
+    .quick-row:hover,
+    .quick-row:focus-within {
+        background: rgb(255 255 255 / 0.09);
+    }
+    .quick-row .quick-sugg:hover,
+    .quick-row .quick-sugg.hl {
+        background: transparent;
+    }
+    .quick-add {
+        display: grid;
+        place-items: center;
+        width: 30px;
+        height: 30px;
+        flex: 0 0 30px;
+        border: 1px solid var(--border);
+        border-radius: 50%;
+        color: var(--text-2);
+        transition: color 0.15s, background 0.15s, border-color 0.15s;
+    }
+    .quick-add:hover,
+    .quick-add.is-fav {
+        color: var(--accent);
+        border-color: color-mix(in srgb, var(--accent) 60%, transparent);
+        background: color-mix(in srgb, var(--accent) 14%, transparent);
+    }
+    .quick-add :global(svg) {
+        width: 15px;
+        height: 15px;
+    }
+    .quick-sugg :global(.cover) {
+        flex: 0 0 36px;
+    }
+    .quick-copy {
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        min-width: 0;
+        gap: 2px;
+    }
+    .quick-copy strong {
+        color: var(--text);
+        font-size: 13px;
+        font-weight: 650;
+    }
+    .quick-copy small {
+        color: var(--text-3);
+        font-size: 11px;
+        font-weight: 500;
+    }
+    .quick-type {
+        flex: 0 0 auto !important;
+        color: var(--text-3);
+        font-size: 10px;
+        text-transform: capitalize;
     }
     .sugg:hover,
     .sugg.hl {

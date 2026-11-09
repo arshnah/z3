@@ -92,6 +92,7 @@ export interface ArtistDetails {
 export interface SearchExtras {
     artists: Artist[];
     albums: CollectionSummary[];
+    playlists: CollectionSummary[];
 }
 
 export interface Playlist {

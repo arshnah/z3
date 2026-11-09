@@ -271,6 +271,7 @@ function setCurrent(track: Song) {
         playerState.currentTrack = track;
         restartCurrent();
     } else {
+        playerState.paused = true;
         playerState.currentTrack = track;
     }
 }
@@ -726,6 +727,7 @@ function betterLyrics(found: string | null, embedded: string | null): string | n
 }
 
 export function resetState() {
+    playerState.paused = true;
     playerState.stream = null;
     playerState.lyrics = null;
     playerState.lyricsPending = false;

@@ -14,12 +14,15 @@ import { Client, type SetActivity, type SetActivityResponse } from '@xhayper/dis
 type Music = typeof MusicRoutes;
 
 const MUSIC_ROUTES = [
-    'scrobbleStatus', 'scrobbleLastfmStart', 'scrobbleLastfmFinish', 'scrobbleListenbrainzConnect',
+    'scrobbleStatus', 'scrobbleTaste', 'scrobbleSimilarArtists', 'scrobbleLastfmStart', 'scrobbleLastfmFinish', 'scrobbleListenbrainzConnect',
     'scrobbleSetEnabled', 'scrobbleDisconnect', 'scrobbleNowPlaying', 'scrobbleSubmit', 'scrobbleRetry',
     'musicLyrics',
     'musicSearchSuggestions',
     'musicSearch',
     'musicSearchExtras',
+    'musicSearchPlaylists',
+    'musicSearchAlbums',
+    'musicSearchVideos',
     'musicArtist',
     'musicArtistSongs',
     'musicCollection',
@@ -332,6 +335,11 @@ export const routes = {
         if (target.protocol !== 'https:' || !['www.last.fm', 'last.fm', 'listenbrainz.org'].includes(target.hostname)) throw new Error('Invalid account connection link.');
         const { shell } = await import('electron');
         await shell.openExternal(url);
+    },
+    async openMusicVideo(videoId: string): Promise<void> {
+        if (!/^[\w-]{11}$/.test(videoId)) throw new Error('Invalid YouTube video ID.');
+        const { shell } = await import('electron');
+        await shell.openExternal(`https://www.youtube.com/watch?v=${videoId}`);
     },
     ...windowChrome,
     async clearRPC() {

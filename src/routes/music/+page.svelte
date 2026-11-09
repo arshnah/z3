@@ -1,20 +1,29 @@
 <script lang="ts">
+    import { goto } from "$app/navigation";
     import Icon from "$lib/components/Icon.svelte";
     import Cover from "$lib/components/Cover.svelte";
     import MediaCard from "$lib/components/MediaCard.svelte";
     import ArtistLinks from "$lib/components/ArtistLinks.svelte";
+    import { client } from "$lib/ephaptic";
     import { libraryState, FAVOURITES_ID } from "$lib/state/library.svelte";
     import { playerState, playPlaylist, playTrack, togglePlay } from "$lib/state/player.svelte";
     import { statsState } from "$lib/state/stats.svelte";
     import { lyricsState } from "$lib/state/lyrics.svelte";
+    import { toasts } from "$lib/state/toast.svelte";
     import { ui } from "$lib/state/ui.svelte";
-    import { openPlaylist, radioFrom, trackMenu } from "$lib/actions";
-    import { artistNames, formatLongDuration } from "$lib/utils";
+    import { collectionMenu, openPlaylist, openCollection, playCollection, radioFrom, trackMenu } from "$lib/actions";
+    import { filterPlaylistRecommendations, filterRecommendationsByArtist } from "$lib/playlist-recommendations";
+    import { splitArtistCredits } from "$lib/music-metadata";
+    import { formatLongDuration, slimSong } from "$lib/utils";
     import { tilt } from "$lib/tilt";
-    import type { Playlist, Song } from "$lib/schema";
+    import type { Artist, CollectionSummary, Playlist, Song } from "$lib/schema";
 
     $effect(() => {
         statsState.load();
+    });
+
+    $effect(() => {
+        void loadWorldwidePlaylists();
     });
 
     const hour = new Date().getHours();
@@ -44,6 +53,167 @@
     });
     const top = $derived((statsState.summary?.topSongs ?? []).slice(0, 14).map(toSong));
     const radios = $derived(top.slice(0, 8));
+
+    let recommendations = $state<Song[]>([]);
+    let similarArtists = $state<Artist[]>([]);
+    let discoveryArtists = $state<Artist[]>([]);
+    let artistTab = $state<"similar" | "discover">("similar");
+    let worldwidePlaylists = $state<CollectionSummary[]>([]);
+    let chartsLoading = $state(true);
+    let chartsStarted = false;
+    let recommendationSource = $state("");
+    let recommendationsLoading = $state(false);
+    let recommendationRequest = 0;
+    let recommendationStarted = false;
+
+    async function loadWorldwidePlaylists() {
+        if (chartsStarted) return;
+        chartsStarted = true;
+        const queries = ["Top 100 Global", "Global Top Songs", "Viral 50 Global", "Worldwide Hits"];
+        const results = await Promise.allSettled(queries.map((query) => client.musicSearchPlaylists(query, "yt")));
+        const playlists = results.flatMap((result) => result.status === "fulfilled" ? result.value : []);
+        worldwidePlaylists = [...new Map(playlists.map((playlist) => [playlist.id, playlist])).values()].slice(0, 12);
+        chartsLoading = false;
+        const failure = results.find((result) => result.status === "rejected");
+        if (failure?.status === "rejected") toasts.error(failure.reason);
+    }
+
+    function lastfmSong(track: Awaited<ReturnType<typeof client.scrobbleTaste>>[number]): Song {
+        return {
+            id: track.id,
+            title: track.title,
+            artists: track.artists.map((name) => ({ name, thumbnails: [] })),
+            thumbnails: [],
+            album: track.album ? { title: track.album, artists: [], thumbnails: [] } : null,
+            duration: track.duration,
+            isDownloaded: false,
+        };
+    }
+
+    function selectTasteSeeds(songs: Song[], limit = 4) {
+        const seenSongs = new Set<string>();
+        const candidates = songs.filter((song) => {
+            const songKey = `${song.title.toLowerCase()}|${song.artists[0]?.name.toLowerCase() ?? ""}`;
+            if (seenSongs.has(songKey)) return false;
+            seenSongs.add(songKey);
+            return true;
+        });
+        const seeds: Song[] = [];
+        const seenArtists = new Set<string>();
+        for (let i = 0; i < limit && seeds.length < candidates.length; i++) {
+            const position = Math.round(i * (candidates.length - 1) / Math.max(limit - 1, 1));
+            const song = candidates.slice(position).find((candidate) => {
+                const artist = candidate.artists[0]?.name.toLowerCase() ?? "";
+                return !seeds.includes(candidate) && (!artist || !seenArtists.has(artist));
+            }) ?? candidates.find((candidate) => {
+                const artist = candidate.artists[0]?.name.toLowerCase() ?? "";
+                return !seeds.includes(candidate) && (!artist || !seenArtists.has(artist));
+            });
+            if (!song) break;
+            seeds.push(song);
+            const artist = song.artists[0]?.name.toLowerCase();
+            if (artist) seenArtists.add(artist);
+        }
+        return seeds;
+    }
+
+    async function loadRecommendations() {
+        const request = ++recommendationRequest;
+        recommendationsLoading = true;
+        recommendations = [];
+        similarArtists = [];
+        discoveryArtists = [];
+        let lastfmSongs: Song[] = [];
+        let lastfmArtists: string[] = [];
+        let heardSongs: Song[] = [];
+        let extendedSummary: Awaited<ReturnType<typeof client.statsSummary>> | null = null;
+        try {
+            const [lastfmTaste, similarArtists, summary] = await Promise.allSettled([
+                client.scrobbleTaste(),
+                client.scrobbleSimilarArtists(),
+                client.statsSummary(500),
+            ]);
+            if (lastfmTaste.status === "fulfilled") lastfmSongs = lastfmTaste.value.map(lastfmSong);
+            else toasts.error(lastfmTaste.reason);
+            if (similarArtists.status === "fulfilled") lastfmArtists = similarArtists.value;
+            else toasts.error(similarArtists.reason);
+            if (summary.status === "fulfilled") extendedSummary = summary.value;
+            else toasts.error(summary.reason);
+        } catch (error) {
+            toasts.error(error);
+        }
+        if (request !== recommendationRequest) return;
+
+        const history = (extendedSummary?.history ?? statsState.summary?.history ?? []).map(toSong);
+        const frequent = (extendedSummary?.topSongs ?? statsState.summary?.topSongs ?? []).map(toSong);
+        const saved = [...libraryState.tracks.values()];
+        heardSongs = [...history, ...frequent, ...lastfmSongs, ...saved, ...(playerState.currentTrack ? [playerState.currentTrack] : [])];
+        const usingLastfm = lastfmSongs.length > 0;
+        const seeds = selectTasteSeeds(usingLastfm ? lastfmSongs : [...history, ...frequent, ...saved], 8);
+        recommendationSource = usingLastfm ? "your Last.fm taste" : "your listening history";
+        if (!seeds.length) {
+            recommendations = [];
+            recommendationsLoading = false;
+            recommendationSource = "";
+            return;
+        }
+
+        const listenedArtists = new Set(heardSongs.flatMap((song) => song.artists.map((artist) => artist.name.toLowerCase())));
+        let similarArtistNames = [...new Set(lastfmArtists)].filter((name) => !listenedArtists.has(name.toLowerCase()));
+        if (!similarArtistNames.length) {
+            const artistSeeds = selectTasteSeeds(seeds, 6)
+                .map((song) => song.artists[0]?.name)
+                .filter((name): name is string => !!name);
+            const similarResults = await Promise.allSettled(artistSeeds.map((name) => client.musicArtist(name)));
+            similarArtistNames = [...new Set(similarResults.flatMap((result) =>
+                result.status === "fulfilled" ? result.value.similarArtists.map((artist) => artist.name) : [],
+            ))].filter((name) => !listenedArtists.has(name.toLowerCase()));
+        }
+
+        const artistResults = await Promise.allSettled(similarArtistNames.slice(0, 8).map((name) => client.musicArtist(name)));
+        if (request !== recommendationRequest) return;
+        const artistDetails = artistResults.flatMap((result) => result.status === "fulfilled" ? [result.value] : []);
+        similarArtists = artistDetails
+            .filter((artist) => !listenedArtists.has(artist.name.toLowerCase()))
+            .filter((artist, i, all) => all.findIndex((other) => other.name.toLowerCase() === artist.name.toLowerCase()) === i)
+            .slice(0, 8);
+
+        const knownIds = [...new Set(heardSongs.map((song) => song.id))];
+        const radioResults = await Promise.allSettled(
+            seeds.map((seed) => client.musicRadio(slimSong($state.snapshot(seed) as Song), knownIds)),
+        );
+        if (request === recommendationRequest) {
+            const radioSongs = radioResults.flatMap((result) => result.status === "fulfilled" ? result.value : []);
+            const relatedNames = new Set(similarArtists.map((artist) => artist.name.toLowerCase()));
+            const discoveryNames = [...new Set(radioSongs.flatMap((song) =>
+                splitArtistCredits(song.artists).map((credit) => credit.name),
+            ))].filter((name) => name && !listenedArtists.has(name.toLowerCase()) && !relatedNames.has(name.toLowerCase()));
+            const discoveryResults = await Promise.allSettled(discoveryNames.slice(0, 8).map((name) => client.musicArtist(name)));
+            if (request !== recommendationRequest) return;
+            discoveryArtists = discoveryResults.flatMap((result) => result.status === "fulfilled" ? [result.value] : [])
+                .filter((artist) => !listenedArtists.has(artist.name.toLowerCase()) && !relatedNames.has(artist.name.toLowerCase()))
+                .filter((artist, i, all) => all.findIndex((other) => other.name.toLowerCase() === artist.name.toLowerCase()) === i)
+                .slice(0, 8);
+            if (!similarArtists.length && discoveryArtists.length) artistTab = "discover";
+            const artistSongs = [...similarArtists, ...discoveryArtists]
+                .flatMap((artist) => artistDetails.find((detail) => detail.name === artist.name)?.topSongs
+                    ?? discoveryResults.flatMap((result) => result.status === "fulfilled" && result.value.name === artist.name ? result.value.topSongs : []));
+            const unseen = filterPlaylistRecommendations([...artistSongs, ...radioSongs], heardSongs, 100);
+            recommendations = filterRecommendationsByArtist(unseen, 20);
+            recommendationsLoading = false;
+            const failure = artistResults.find((result) => result.status === "rejected")
+                ?? radioResults.find((result) => result.status === "rejected")
+                ?? discoveryResults.find((result) => result.status === "rejected");
+            if (failure?.status === "rejected") toasts.error(failure.reason);
+        }
+    }
+
+    $effect(() => {
+        if (!statsState.loading && !recommendationStarted) {
+            recommendationStarted = true;
+            void loadRecommendations();
+        }
+    });
 
     // The hero: what's playing, else the last thing you played.
     const hero = $derived(playerState.currentTrack ?? recent[0] ?? null);
@@ -104,6 +274,99 @@
         {/if}
     </section>
 
+    {#if recommendationSource}
+        <section class="section discovery">
+            <div class="section-head discovery-head">
+                <div class="discovery-copy">
+                    <h2 class="section-title">Recommended for you</h2>
+                    <span class="section-sub">Inspired by {recommendationSource}</span>
+                </div>
+                <button class="icon-btn discovery-refresh" aria-label="Refresh recommendations" title="Refresh recommendations"
+                    disabled={recommendationsLoading} onclick={() => loadRecommendations()}>
+                    <Icon name="refresh-cw" />
+                </button>
+            </div>
+            {#if recommendationsLoading && !recommendations.length}
+                <div class="shelf">
+                    {#each Array(6) as _, i}
+                        <div class="recommendation-skeleton" style:animation-delay="{i * 70}ms"></div>
+                    {/each}
+                </div>
+            {:else if recommendations.length}
+                <div class="shelf">
+                    {#each recommendations as song, i (song.id)}
+                        <MediaCard
+                            title={song.title}
+                            artists={song.artists}
+                            providerHint={song.id.startsWith("js:") ? "js" : "yt"}
+                            thumbnails={song.thumbnails}
+                            index={i}
+                            playing={playerState.currentTrack?.id === song.id}
+                            paused={playerState.paused}
+                            onclick={() => (playerState.currentTrack?.id === song.id ? togglePlay() : playTrack(song))}
+                            onplay={() => (playerState.currentTrack?.id === song.id ? togglePlay() : playTrack(song))}
+                            oncontextmenu={(e) => ui.openMenu(e, trackMenu(song))}
+                        />
+                    {/each}
+                    {#if recommendationsLoading}
+                        {#each Array(3) as _, i}
+                            <div class="recommendation-skeleton" style:animation-delay="{i * 70}ms"></div>
+                        {/each}
+                    {/if}
+                </div>
+            {:else}
+                <p class="discovery-empty">Keep listening and we’ll find your next favorite.</p>
+            {/if}
+        </section>
+    {/if}
+
+    {#if similarArtists.length || discoveryArtists.length}
+        <section class="section">
+            <div class="section-head">
+                <h2 class="section-title">Artists for you</h2>
+                <div class="segmented" aria-label="Artist recommendations">
+                    <button
+                        aria-pressed={artistTab === "similar"}
+                        disabled={!similarArtists.length}
+                        onclick={() => (artistTab = "similar")}
+                    >Similar</button>
+                    <button
+                        aria-pressed={artistTab === "discover"}
+                        disabled={!discoveryArtists.length}
+                        onclick={() => (artistTab = "discover")}
+                    >Discover</button>
+                </div>
+            </div>
+            {#if artistTab === "similar"}
+                <div class="shelf radios">
+                    {#each similarArtists as artist, i (artist.id ?? artist.name)}
+                        <MediaCard
+                            round
+                            title={artist.name}
+                            subtitle="Similar to your listening"
+                            thumbnails={artist.thumbnails}
+                            index={i}
+                            onclick={() => goto(`/music/artist/name:${encodeURIComponent(artist.name)}`)}
+                        />
+                    {/each}
+                </div>
+            {:else}
+                <div class="shelf radios">
+                    {#each discoveryArtists as artist, i (artist.id ?? artist.name)}
+                        <MediaCard
+                            round
+                            title={artist.name}
+                            subtitle="A new artist for you"
+                            thumbnails={artist.thumbnails}
+                            index={i}
+                            onclick={() => goto(`/music/artist/name:${encodeURIComponent(artist.name)}`)}
+                        />
+                    {/each}
+                </div>
+            {/if}
+        </section>
+    {/if}
+
     {#if libraryState.playlists.length}
         <section class="section">
             <div class="section-head">
@@ -135,27 +398,41 @@
         </section>
     {/if}
 
-    {#if recent.length > 1}
-        <section class="section">
-            <div class="section-head"><h2 class="section-title">Jump back in</h2></div>
+    <section class="section">
+        <div class="section-head">
+            <div>
+                <h2 class="section-title">Worldwide charts</h2>
+                <span class="section-sub">Global top 100, viral hits, and more</span>
+            </div>
+            <a class="section-sub link" href="/music/genres">Browse genres</a>
+        </div>
+        {#if chartsLoading && !worldwidePlaylists.length}
             <div class="shelf">
-                {#each recent as song, i (song.id)}
+                {#each Array(5) as _, i}
+                    <div class="recommendation-skeleton" style:animation-delay="{i * 70}ms"></div>
+                {/each}
+            </div>
+        {:else if worldwidePlaylists.length}
+            <div class="shelf">
+                {#each worldwidePlaylists as playlist, i (playlist.id)}
                     <MediaCard
-                        title={song.title}
-                        artists={song.artists}
-                        providerHint={song.id.startsWith("js:") ? "js" : "yt"}
-                        thumbnails={song.thumbnails}
+                        title={playlist.title}
+                        subtitle={playlist.subtitle ?? "YouTube Music playlist"}
+                        thumbnails={playlist.thumbnails}
+                        providerHint="yt"
                         index={i}
-                        playing={playerState.currentTrack?.id === song.id}
+                        playing={playerState.currentPlaylist?.id === `collection:${playlist.id}`}
                         paused={playerState.paused}
-                        onclick={() => (playerState.currentTrack?.id === song.id ? togglePlay() : playTrack(song))}
-                        onplay={() => (playerState.currentTrack?.id === song.id ? togglePlay() : playTrack(song))}
-                        oncontextmenu={(e) => ui.openMenu(e, trackMenu(song))}
+                        onclick={() => openCollection(playlist)}
+                        onplay={() => playCollection(playlist)}
+                        oncontextmenu={(e) => ui.openMenu(e, collectionMenu(playlist))}
                     />
                 {/each}
             </div>
-        </section>
-    {/if}
+        {:else}
+            <p class="discovery-empty">Worldwide playlists aren’t available right now.</p>
+        {/if}
+    </section>
 
     {#if radios.length}
         <section class="section">
@@ -333,6 +610,40 @@
         pointer-events: none;
     }
 
+    .discovery-head {
+        align-items: center;
+    }
+    .discovery-copy {
+        display: flex;
+        align-items: baseline;
+        gap: 12px;
+        min-width: 0;
+        flex-wrap: wrap;
+    }
+    .discovery-refresh {
+        flex-shrink: 0;
+        color: var(--text-2);
+    }
+    .discovery-refresh:disabled {
+        opacity: 0.45;
+        cursor: wait;
+    }
+    .recommendation-skeleton {
+        aspect-ratio: 1;
+        border-radius: 26px;
+        background: linear-gradient(110deg, rgb(255 255 255 / 0.04) 25%, rgb(255 255 255 / 0.1) 45%, rgb(255 255 255 / 0.04) 65%);
+        background-size: 220% 100%;
+        animation: recommendation-shimmer 1.4s ease-in-out infinite, rise 0.5s var(--ease-out) both;
+    }
+    @keyframes recommendation-shimmer {
+        to { background-position: -220% 0; }
+    }
+    .discovery-empty {
+        padding: 10px 0 2px;
+        color: var(--text-2);
+        font-size: 14px;
+    }
+
     .fav-art {
         width: 100%;
         height: 100%;
@@ -383,6 +694,13 @@
         text-decoration: underline;
     }
 
+    @media (max-width: 560px) {
+        .discovery-copy {
+            align-items: flex-start;
+            flex-direction: column;
+            gap: 2px;
+        }
+    }
     @media (max-width: 820px) {
         .hero.has-track {
             grid-template-columns: 1fr;

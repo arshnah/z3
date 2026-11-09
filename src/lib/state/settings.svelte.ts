@@ -10,7 +10,7 @@ class SettingsStore {
     isRemote = $state<boolean>(false);
     discordRpcEnabled = $state<boolean>(false);
     preferLocalSearchResults = $state<boolean>(
-        browser && localStorage.getItem(PREFER_LOCAL_SEARCH_KEY) === "true",
+        browser && localStorage.getItem(PREFER_LOCAL_SEARCH_KEY) !== "false",
     );
     loading = $state<boolean>(true);
     saving = $state<boolean>(false);
@@ -75,8 +75,7 @@ class SettingsStore {
 
     setPreferLocalSearchResults(enabled: boolean) {
         try {
-            if (enabled) localStorage.setItem(PREFER_LOCAL_SEARCH_KEY, "true");
-            else localStorage.removeItem(PREFER_LOCAL_SEARCH_KEY);
+            localStorage.setItem(PREFER_LOCAL_SEARCH_KEY, String(enabled));
             this.preferLocalSearchResults = enabled;
         } catch (err) {
             toasts.error(err);

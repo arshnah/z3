@@ -116,6 +116,14 @@ export const androidClient: Routes = {
         return cacheSongs((await providers.search(query, provider)).map((song) => ({ ...song, isDownloaded: !!data.songs[song.id]?.file })));
     },
     musicSearchExtras: providers.searchExtras,
+    musicSearchPlaylists: providers.searchPlaylists,
+    musicSearchAlbums: providers.searchAlbums,
+    musicSearchVideos: providers.searchVideos,
+    async openMusicVideo(videoId) {
+        if (!/^[\w-]{11}$/.test(videoId)) throw new Error('Invalid YouTube video ID.');
+        const { Browser } = await import('@capacitor/browser');
+        await Browser.open({ url: `https://www.youtube.com/watch?v=${videoId}` });
+    },
     async musicArtist(idOrQuery, nameHint) {
         const data = await storage.snapshot();
         const downloaded = new Set(Object.values(data.songs).filter((s) => s.file).map((s) => s.song.id));

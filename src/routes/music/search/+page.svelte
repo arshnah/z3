@@ -1,9 +1,12 @@
 <script lang="ts">
+    import { afterNavigate, goto } from "$app/navigation";
+    import { page } from "$app/state";
     import Icon from "$lib/components/Icon.svelte";
     import Cover from "$lib/components/Cover.svelte";
     import TrackList from "$lib/components/TrackList.svelte";
     import MediaCard from "$lib/components/MediaCard.svelte";
     import ArtistLinks from "$lib/components/ArtistLinks.svelte";
+    import { client } from "$lib/ephaptic";
     import { searchState } from "$lib/state/search.svelte";
     import { playerState, playTrack, playPlaylist, togglePlay, addToQueue } from "$lib/state/player.svelte";
     import { ui } from "$lib/state/ui.svelte";
@@ -27,14 +30,33 @@
         { label: "Rock", q: "classic rock", hue: 0, icon: "guitar" },
     ];
 
+    afterNavigate(({ to }) => {
+        if (!to || to.url.pathname !== "/music/search") return;
+        const query = to.url.searchParams.get("q")?.trim() ?? "";
+        const provider = to.url.searchParams.get("provider") === "js" ? "js" : "yt";
+        searchState.provider = provider;
+        if (!query) {
+            searchState.clear();
+            return;
+        }
+        searchState.query = query;
+        void searchState.run(query);
+    });
+
     function search(q: string) {
-        searchState.query = q;
-        searchState.run();
+        const params = new URLSearchParams({ q, provider: searchState.provider });
+        const target = `/music/search?${params}`;
+        if (page.url.pathname === "/music/search" && page.url.search === `?${params}`) {
+            void searchState.run(q);
+        } else {
+            void goto(target);
+        }
     }
 
     const results = $derived(searchState.results);
     const artists = $derived(searchState.artists);
     const albums = $derived(searchState.albums);
+    const playlists = $derived(searchState.playlists);
     const top = $derived(results[0]);
     function playbackTrack(track: (typeof results)[number]) {
         return settingsState.preferLocalSearchResults ? libraryState.findLocalTrack(track) ?? track : track;
@@ -49,6 +71,15 @@
         createdAt: 0,
         isProtected: true,
     });
+
+    async function watchVideo(song: (typeof searchState.videos)[number]) {
+        try {
+            if (!song.id.startsWith("yt:")) throw new Error("This video cannot be opened.");
+            await client.openMusicVideo(song.id.slice(3));
+        } catch (error) {
+            toasts.error(error);
+        }
+    }
 </script>
 
 <div class="page">
@@ -65,7 +96,7 @@
             <div class="skeleton" style="height:340px;border-radius:28px"></div>
             <div class="rows">{#each Array(6) as _}<div class="skeleton" style="height:64px;border-radius:20px"></div>{/each}</div>
         </div>
-    {:else if results.length && top}
+    {:else if results.length || artists.length || albums.length || playlists.length || searchState.videos.length || searchState.videosLoading}
         <header class="results-head">
             <span class="kicker"><Icon name="search" /> Results</span>
             <h1 class="page-title">“{searchState.lastQuery}”</h1>
@@ -91,6 +122,7 @@
             </section>
         {/if}
 
+        {#if results.length && top}
         <div class="results-grid" class:stale={searchState.loading}>
             <!-- svelte-ignore a11y_click_events_have_key_events -->
             <div
@@ -141,6 +173,42 @@
                 <TrackList tracks={results} showAlbum={true} onplay={(i) => playTrack(playbackTrack(results[i]))} />
             </div>
         </div>
+        {/if}
+
+        {#if searchState.provider === "yt"}
+            <section class="section">
+                <div class="section-head">
+                    <div>
+                        <h2 class="section-title">Music videos</h2>
+                        <span class="section-sub">Watch on YouTube</span>
+                    </div>
+                    {#if searchState.videosLoading}
+                        <span class="section-sub">Finding videos…</span>
+                    {/if}
+                </div>
+                {#if searchState.videos.length}
+                    <div class="shelf">
+                        {#each searchState.videos as video, i (video.id)}
+                            <MediaCard
+                                title={video.title}
+                                artists={video.artists}
+                                subtitle="Watch on YouTube"
+                                providerHint="yt"
+                                thumbnails={video.thumbnails}
+                                index={i}
+                                onclick={() => watchVideo(video)}
+                                onplay={() => watchVideo(video)}
+                            />
+                        {/each}
+                    </div>
+                {:else if searchState.videosError}
+                    <div class="recommendation-error">
+                        <span class="muted">{searchState.videosError}</span>
+                        <button class="btn btn-ghost" onclick={() => searchState.run()}>Retry</button>
+                    </div>
+                {/if}
+            </section>
+        {/if}
 
         {#if albums.length}
             <section class="section">
@@ -153,6 +221,31 @@
                             title={col.title}
                             artists={col.artists}
                             subtitle={col.year ?? (col.artists.length ? "" : col.subtitle ?? "")}
+                            providerHint={searchState.provider}
+                            thumbnails={col.thumbnails}
+                            index={i}
+                            playing={playerState.currentPlaylist?.id === `collection:${col.id}`}
+                            paused={playerState.paused}
+                            onclick={() => openCollection(col, col.artists[0]?.name)}
+                            onplay={() => playCollection(col)}
+                            oncontextmenu={(e) => ui.openMenu(e, collectionMenu(col))}
+                        />
+                    {/each}
+                </div>
+            </section>
+        {/if}
+
+        {#if playlists.length}
+            <section class="section">
+                <div class="section-head">
+                    <h2 class="section-title">Public playlists</h2>
+                </div>
+                <div class="shelf">
+                    {#each playlists as col, i (col.id + ":" + i)}
+                        <MediaCard
+                            title={col.title}
+                            subtitle={col.subtitle ?? "Playlist"}
+                            artists={col.artists}
                             providerHint={searchState.provider}
                             thumbnails={col.thumbnails}
                             index={i}
@@ -188,6 +281,10 @@
         {/if}
 
         <section class="section">
+            <div class="section-head">
+                <h2 class="section-title">Browse moods</h2>
+                <a class="section-sub link" href="/music/genres">Genres & playlists</a>
+            </div>
             <div class="moods">
                 {#each moods as m, i}
                     <button class="mood" style:--h={m.hue} style:animation-delay="{i * 40}ms" onclick={() => search(m.q)}>

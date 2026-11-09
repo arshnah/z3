@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { filterPlaylistRecommendations } from '../src/lib/playlist-recommendations.ts';
+import { filterPlaylistRecommendations, filterRecommendationsByArtist } from '../src/lib/playlist-recommendations.ts';
 
 function song(id, title, artists) {
     return {
@@ -45,4 +45,16 @@ test('removes duplicate recommendations and honors the result limit', () => {
     ];
 
     assert.deepEqual(filterPlaylistRecommendations(recommendations, [], 1).map((track) => track.id), ['yt:a']);
+});
+
+test('keeps recommendations to one song per credited artist', () => {
+    const recommendations = [
+        song('yt:a', 'One', ['Artist One']),
+        song('yt:b', 'Two', ['Artist One']),
+        song('yt:c', 'Three', ['Artist Two feat. Artist One']),
+        song('yt:d', 'Four', ['Artist Two']),
+        song('yt:e', 'Five', ['Artist Three']),
+    ];
+
+    assert.deepEqual(filterRecommendationsByArtist(recommendations).map((track) => track.id), ['yt:a', 'yt:d', 'yt:e']);
 });

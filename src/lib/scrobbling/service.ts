@@ -94,6 +94,79 @@ export class ScrobblingService {
         };
     }
 
+    async taste() {
+        const data = await this.snapshot();
+        if (!data.lastfm.sessionKey || !data.lastfm.username) return [];
+
+        const result = await this.recentTracks(data.lastfm.username);
+        const recent = result.recenttracks?.track;
+        const tracks = Array.isArray(recent) ? recent : recent ? [recent] : [];
+        return tracks.flatMap((track: any) => {
+            if (track['@attr']?.nowplaying === 'true') return [];
+            const title = typeof track.name === 'string' ? track.name.trim() : '';
+            const artistValue = track.artist?.['#text'] ?? track.artist?.name ?? track.artist;
+            const artist = typeof artistValue === 'string' ? artistValue.trim() : '';
+            if (!title || !artist) return [];
+            const albumValue = track.album?.['#text'] ?? track.album?.name ?? track.album;
+            const album = typeof albumValue === 'string' ? albumValue.trim() : '';
+            return [{
+                id: `lastfm:${artist.toLowerCase()}:${title.toLowerCase()}`,
+                title,
+                artists: [artist],
+                ...(album ? { album } : {}),
+                duration: 0,
+            }];
+        });
+    }
+
+    async similarArtists() {
+        const data = await this.snapshot();
+        if (!data.lastfm.sessionKey || !data.lastfm.username) return [];
+
+        const result = await this.recentTracks(data.lastfm.username);
+        const recent = result.recenttracks?.track;
+        const tracks = Array.isArray(recent) ? recent : recent ? [recent] : [];
+        const known = new Set<string>();
+        const seeds: string[] = [];
+        for (const track of tracks) {
+            if (track['@attr']?.nowplaying === 'true') continue;
+            const value = track.artist?.['#text'] ?? track.artist?.name ?? track.artist;
+            const artist = typeof value === 'string' ? value.trim() : '';
+            const key = artist.toLowerCase();
+            if (artist) known.add(key);
+            if (artist && seeds.length < 8 && !seeds.some((seed) => seed.toLowerCase() === key)) {
+                seeds.push(artist);
+            }
+        }
+
+        const responses = await Promise.allSettled(seeds.map((artist) => this.lastfm('artist.getSimilar', {
+            artist,
+            limit: '10',
+        }, undefined, false)));
+        const matches = new Map<string, { name: string; score: number }>();
+        for (const response of responses) {
+            if (response.status !== 'fulfilled') continue;
+            const artists = response.value.similarartists?.artist ?? [];
+            for (const artist of artists) {
+                const name = typeof artist.name === 'string' ? artist.name.trim() : '';
+                const key = name.toLowerCase();
+                if (!name || known.has(key)) continue;
+                const score = Number(artist.match) || 0;
+                const existing = matches.get(key);
+                if (existing) existing.score += score;
+                else matches.set(key, { name, score });
+            }
+        }
+        return [...matches.values()].sort((a, b) => b.score - a.score).slice(0, 24).map(({ name }) => name);
+    }
+
+    private recentTracks(username: string) {
+        return this.lastfm('user.getRecentTracks', {
+            user: username,
+            limit: '100',
+        }, undefined, false);
+    }
+
     private async lastfm(method: string, values: Record<string, string>, sessionKey?: string, signed = true) {
         if (!this.credentials.apiKey || !this.credentials.apiSecret) throw new Error('Last.fm is not configured in this build.');
         const params: Record<string, string> = { ...values, method, api_key: this.credentials.apiKey };
@@ -276,6 +349,8 @@ export class ScrobblingService {
 export function scrobblingRoutes(service: ScrobblingService) {
     return {
         scrobbleStatus: () => service.status(),
+        scrobbleTaste: () => service.taste(),
+        scrobbleSimilarArtists: () => service.similarArtists(),
         scrobbleLastfmStart: () => service.startLastfm(),
         scrobbleLastfmFinish: () => service.finishLastfm(),
         scrobbleListenbrainzConnect: (token: string) => service.connectListenbrainz(token),
