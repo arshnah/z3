@@ -34,6 +34,7 @@ import { comparableText, lyricsfileToLrc } from '../lib/lyricsfile';
 import { routes as scrobbling } from '../lib/scrobbling';
 import { musicText, youtubeArtistNames, youtubeArtists } from '../../src/lib/music-metadata';
 import { parseExportifyCsv } from '../../src/lib/playlist-import';
+import { chooseAudioFormat, isAudioQuality, type AudioQuality } from '../../src/lib/audio-quality';
 import {
     fetchArtistAllSongs,
     fetchArtistDetails,
@@ -243,7 +244,7 @@ async function streamRangedUrl(url: string, contentLength: number): Promise<Read
  * `.m4a` — a mislabelled container that won't play everywhere and that TagLib
  * can't tag. We ask for `mp4` first and only fall back to any container.
  */
-async function downloadYtAudio(videoId: string): Promise<ReadableStream<Uint8Array>> {
+async function downloadYtAudio(videoId: string, quality: AudioQuality = 'best'): Promise<ReadableStream<Uint8Array>> {
     // Prefer YouTube Music's client (clean audio-only formats), then plain web.
     const clients: Array<'YTMUSIC' | 'WEB'> = ['YTMUSIC', 'WEB'];
     const formatAttempts: Array<Record<string, unknown>> = [
@@ -264,9 +265,43 @@ async function downloadYtAudio(videoId: string): Promise<ReadableStream<Uint8Arr
             continue;
         }
 
-        for (const opts of formatAttempts) {
+        const formats = info.streaming_data?.adaptive_formats ?? [];
+        const mp4Formats = formats.filter((format) => format.has_audio && !format.has_video && format.mime_type.includes('audio/mp4'));
+        const anyAudioFormats = formats.filter((format) => format.has_audio && !format.has_video);
+        const selected = chooseAudioFormat(mp4Formats, quality, (format) => format.bitrate / 1000)
+            ?? chooseAudioFormat(anyAudioFormats, quality, (format) => format.bitrate / 1000);
+        const maxBitrate = quality === 'high'
+            ? 256
+            : quality === 'medium'
+              ? 160
+              : quality === 'low'
+                ? 96
+                : quality === 'skype-2008'
+                  ? 8
+                  : Infinity;
+        const eligible = quality === 'best'
+            ? [...mp4Formats, ...anyAudioFormats]
+            : [...mp4Formats, ...anyAudioFormats].filter((format) => format.bitrate / 1000 <= maxBitrate);
+        const qualityFormats = eligible.length
+            ? eligible.toSorted((a, b) => b.bitrate - a.bitrate)
+            : [...mp4Formats, ...anyAudioFormats].toSorted((a, b) => a.bitrate - b.bitrate);
+        const attempts: typeof formats[number][] = selected ? [selected] : [];
+        for (const format of qualityFormats) {
+            if (!attempts.includes(format)) attempts.push(format);
+        }
+        if (!attempts.length) {
+            for (const opts of formatAttempts) {
+                try {
+                    const format = info.chooseFormat(opts as any);
+                    if (!attempts.includes(format)) attempts.push(format);
+                } catch {
+                    // This client may not have a format matching the requested container.
+                }
+            }
+        }
+
+        for (const format of attempts) {
             try {
-                const format = info.chooseFormat(opts as any);
                 if (!format.url && !format.signature_cipher && !format.cipher) continue;
                 const url = `${await format.decipher(yt.session.player)}&pot=${pot}`;
                 const contentLength = Number(format.content_length) || 0;
@@ -1100,7 +1135,14 @@ export const routes = {
      * local. Pure search results (no index record) stay off-disk — they only
      * live in the frontend cache until explicitly added to a playlist.
      */
-    async musicStream(id: string, encryptedJioSaavnUrl?: string, persist: boolean = true, _track?: Song): Promise<Stream> {
+    async musicStream(
+        id: string,
+        encryptedJioSaavnUrl?: string,
+        persist: boolean = true,
+        _track?: Song,
+        quality: AudioQuality = 'best',
+    ): Promise<Stream> {
+        if (!isAudioQuality(quality)) throw new Error('Invalid streaming quality.');
         // Downloaded/local songs must not wait on the YouTube client starting up.
         await ensureStorage();
         const { protocol, cleanId } = splitId(id);
@@ -1130,7 +1172,7 @@ export const routes = {
             case 'yt': {
                 await init();
                 try {
-                    audio = await webStreamToBuffer(await downloadYtAudio(cleanId));
+                    audio = await webStreamToBuffer(await downloadYtAudio(cleanId, quality));
                 } catch (err: any) {
                     if (err?.info?.error_type === 'UNPLAYABLE' || /unplayable/i.test(String(err?.message))) {
                         throw new Error(
@@ -1149,9 +1191,8 @@ export const routes = {
                     if (!encryptedJioSaavnUrl) throw new Error('No encrypted media URL found for the song!');
                 }
 
-                const url = (await Saavn.experimental.fetchStreamUrls(encryptedJioSaavnUrl, 'edge', true))
-                    .toSorted((a, b) => parseInt(a.bitrate) - parseInt(b.bitrate))
-                    .at(-1);
+                const formats = await Saavn.experimental.fetchStreamUrls(encryptedJioSaavnUrl, 'edge', true);
+                const url = chooseAudioFormat(formats, quality, (format) => Number.parseInt(format.bitrate, 10));
 
                 if (!url) throw new Error('Failed to decrypt the JioSaavn media URL.');
 
@@ -1298,27 +1339,28 @@ export const routes = {
      * downloaded {@link Song}. If the track is already downloaded it is returned
      * as-is without re-fetching.
      */
-    async musicDownloadSong(track?: Song, trackId?: string): Promise<Song> {
+    async musicDownloadSong(track?: Song, trackId?: string, quality: AudioQuality = 'best'): Promise<Song> {
         const id = track?.id ?? trackId;
         if (!id) throw new Error('At least one of `track` or `trackId` must be given.');
+        if (!isAudioQuality(quality)) throw new Error('Invalid download quality.');
         // One download per song at a time: concurrent requests share it rather
         // than writing the same file twice (and racing the tag embedder).
         let pending = downloadsInFlight.get(id);
         if (!pending) {
-            pending = downloadSong(track, trackId).finally(() => downloadsInFlight.delete(id));
+            pending = downloadSong(track, trackId, quality).finally(() => downloadsInFlight.delete(id));
             downloadsInFlight.set(id, pending);
         }
         return pending;
     },
 
-    async musicPlaylistAddTrack(playlistId: string, track?: Song, trackId?: string): Promise<Song> {
+    async musicPlaylistAddTrack(playlistId: string, track?: Song, trackId?: string, quality: AudioQuality = 'best'): Promise<Song> {
         await ensureStorage();
         assertPlaylistId(playlistId);
         if (!(await vfs.exists(playlistId))) throw new Error('Playlist not found');
 
         // Adding to a playlist is the trigger to actually persist the song.
         // (Downloaded outside the lock so a slow download doesn't block edits.)
-        const song = await routes.musicDownloadSong(track, trackId);
+        const song = await routes.musicDownloadSong(track, trackId, quality);
         const record = await metadata.get(song.id);
 
         await withPlaylistLock(playlistId, async () => {
@@ -2030,7 +2072,7 @@ const imageCache = new Map<string, { data: Uint8Array; mimetype: string }>();
  * downloaded {@link Song}. If the track is already downloaded it is returned
  * as-is without re-fetching.
  */
-async function downloadSong(track?: Song, trackId?: string): Promise<Song> {
+async function downloadSong(track?: Song, trackId?: string, quality: AudioQuality = 'best'): Promise<Song> {
     await ensureStorage();
 
     if (!track && !trackId) throw new Error('At least one of `track` or `trackId` must be given.');
@@ -2094,7 +2136,7 @@ async function downloadSong(track?: Song, trackId?: string): Promise<Song> {
                 /* no lyrics */
             }
         }
-        audio = await webStreamToBuffer(await downloadYtAudio(cleanId));
+        audio = await webStreamToBuffer(await downloadYtAudio(cleanId, quality));
     } else if (protocol === 'js') {
         const meta = (await Saavn.getById({ songIds: cleanId })).songs?.[0];
         title = track?.title || meta?.title || 'Untitled';
@@ -2119,7 +2161,7 @@ async function downloadSong(track?: Song, trackId?: string): Promise<Song> {
         }
         if (!lyrics) lyrics = meta?.lyrics?.snippet ?? null;
 
-        const stream = await routes.musicStream(id, meta?.media?.encryptedUrl, false);
+        const stream = await routes.musicStream(id, meta?.media?.encryptedUrl, false, undefined, quality);
         audio = Buffer.from(stream.data);
     } else {
         throw new Error('Unsupported ID protocol. Maybe you are using a wrong version.');

@@ -2,6 +2,14 @@ import { browser } from "$app/environment";
 import { client } from "$lib/ephaptic";
 import { libraryState } from "$lib/state/library.svelte";
 import { toasts } from "$lib/state/toast.svelte";
+import {
+    getDownloadQuality,
+    getStreamingQuality,
+    isAudioQuality,
+    saveDownloadQuality,
+    saveStreamingQuality,
+    type AudioQuality,
+} from "$lib/audio-quality";
 
 const PREFER_LOCAL_SEARCH_KEY = "zeta:prefer-local-search-results";
 
@@ -9,6 +17,8 @@ class SettingsStore {
     musicDir = $state<string>("");
     isRemote = $state<boolean>(false);
     discordRpcEnabled = $state<boolean>(false);
+    streamingQuality = $state<AudioQuality>(browser ? getStreamingQuality() : "best");
+    downloadQuality = $state<AudioQuality>(browser ? getDownloadQuality() : "best");
     preferLocalSearchResults = $state<boolean>(
         browser && localStorage.getItem(PREFER_LOCAL_SEARCH_KEY) !== "false",
     );
@@ -68,6 +78,26 @@ class SettingsStore {
     async setDiscordRpcEnabled(enabled: boolean) {
         try {
             this.discordRpcEnabled = await client.setDiscordRpcEnabled(enabled);
+        } catch (err) {
+            toasts.error(err);
+        }
+    }
+
+    setStreamingQuality(value: string) {
+        if (!isAudioQuality(value)) throw new Error("Invalid streaming quality.");
+        try {
+            saveStreamingQuality(value);
+            this.streamingQuality = value;
+        } catch (err) {
+            toasts.error(err);
+        }
+    }
+
+    setDownloadQuality(value: string) {
+        if (!isAudioQuality(value)) throw new Error("Invalid download quality.");
+        try {
+            saveDownloadQuality(value);
+            this.downloadQuality = value;
         } catch (err) {
             toasts.error(err);
         }

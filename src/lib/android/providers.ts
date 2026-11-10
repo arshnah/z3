@@ -2,6 +2,7 @@ import { CapacitorHttp } from '@capacitor/core';
 import { Song as Saavn } from '@saavn-labs/sdk';
 import { Innertube, Parser, Platform } from 'youtubei.js/web';
 import type { ArtistDetails, CollectionDetails, MusicProvider, SearchExtras, Song } from '../schema';
+import { chooseAudioFormat, type AudioQuality } from '../audio-quality';
 import {
     fetchArtistAllSongs,
     fetchArtistDetails,
@@ -143,22 +144,28 @@ export async function suggestions(query: string): Promise<string[]> {
     });
 }
 
-export async function resolveAudio(id: string): Promise<{ url: string; mimetype: string }> {
+export async function resolveAudio(id: string, quality: AudioQuality = 'best'): Promise<{ url: string; mimetype: string }> {
     if (id.startsWith('js:')) {
         const song = (await Saavn.getById({ songIds: id.slice(3) })).songs?.[0];
         const encrypted = song?.media?.encryptedUrl;
         if (!encrypted) throw new Error('JioSaavn did not return audio for this song.');
         const formats = await Saavn.experimental.fetchStreamUrls(encrypted, 'edge', true);
-        const best = formats.toSorted((a, b) => parseInt(b.bitrate) - parseInt(a.bitrate))[0];
-        if (!best) throw new Error('No playable JioSaavn audio was found.');
-        return { url: best.url, mimetype: 'audio/mp4' };
+        const selected = chooseAudioFormat(formats, quality, (format) => Number.parseInt(format.bitrate, 10));
+        if (!selected) throw new Error('No playable JioSaavn audio was found.');
+        return { url: selected.url, mimetype: 'audio/mp4' };
     }
     if (!id.startsWith('yt:')) throw new Error('This song is not available on the phone. Import its audio file first.');
     const tube = await yt();
     const { mintPoToken } = await import('./potoken');
     const token = await mintPoToken(id.slice(3));
     const info = await tube.getBasicInfo(id.slice(3), { client: 'YTMUSIC' });
-    const format = info.chooseFormat({ type: 'audio', quality: 'best', format: 'mp4' });
+    const formats = info.streaming_data?.adaptive_formats ?? [];
+    const mp4Formats = formats.filter((format) => format.has_audio && !format.has_video && format.mime_type.includes('audio/mp4'));
+    const anyAudioFormats = formats.filter((format) => format.has_audio && !format.has_video);
+    const format =
+        chooseAudioFormat(mp4Formats, quality, (candidate) => candidate.bitrate / 1000)
+        ?? chooseAudioFormat(anyAudioFormats, quality, (candidate) => candidate.bitrate / 1000)
+        ?? info.chooseFormat({ type: 'audio', quality: 'best', format: 'mp4' });
     const url = new URL(await format.decipher(tube.session.player));
     url.searchParams.set('pot', token);
     if (format.content_length) url.searchParams.set('range', `0-${Number(format.content_length) - 1}`);

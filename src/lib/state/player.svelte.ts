@@ -3,6 +3,7 @@ import { client } from "$lib/ephaptic";
 import type { Stream, Song, Playlist } from "$lib/schema";
 import { shuffle, isSyncedLyrics, slimSong } from "$lib/utils";
 import { libraryState } from "$lib/state/library.svelte";
+import { getStreamingQuality } from "$lib/audio-quality";
 import { filterRadioRecommendations } from "$lib/playlist-recommendations";
 
 export interface CacheRecord {
@@ -710,7 +711,13 @@ export function loadTrack(track: Song | null): Promise<void> {
 
         // Only the audio gates playback. A stream failure propagates so callers
         // can surface it to the user.
-        const stream = await client.musicStream(track.id, undefined, true, slimSong($state.snapshot(track) as Song));
+        const stream = await client.musicStream(
+            track.id,
+            undefined,
+            true,
+            slimSong($state.snapshot(track) as Song),
+            getStreamingQuality(),
+        );
 
         // If fetching this track also saved it to disk, reflect that in the library.
         if (stream.savedToDisk) libraryState.markDownloaded(track.id, track);

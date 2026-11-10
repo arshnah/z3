@@ -4,6 +4,7 @@ import type { Playlist, Song } from "$lib/schema";
 import { toasts } from "$lib/state/toast.svelte";
 import { isAndroid } from '$lib/platform';
 import { findLocalTrackMatch } from '$lib/local-track-match';
+import { getDownloadQuality } from '$lib/audio-quality';
 
 export const FAVOURITES_ID = "favourites.m3u8";
 
@@ -127,7 +128,7 @@ class LibraryStore {
         if (track.isDownloaded || this.downloading[track.id]) return true;
         this.downloading[track.id] = true;
         try {
-            await client.musicDownloadSong($state.snapshot(track) as Song);
+            await client.musicDownloadSong($state.snapshot(track) as Song, undefined, getDownloadQuality());
             this.markDownloaded(track.id, track);
             if (!quiet) toasts.success(`Downloaded “${track.title}”.`);
             return true;
@@ -165,7 +166,7 @@ class LibraryStore {
         // Optimistic insert.
         this.update(playlistId, (p) => ({ ...p, tracks: [...p.tracks, plain] }));
         try {
-            const saved = await client.musicPlaylistAddTrack(playlistId, plain);
+            const saved = await client.musicPlaylistAddTrack(playlistId, plain, undefined, getDownloadQuality());
             // Replace with the server's canonical (downloaded) version.
             this.update(playlistId, (p) => ({
                 ...p,
@@ -222,7 +223,7 @@ class LibraryStore {
             for (const track of missing) {
                 try {
                     const plain = $state.snapshot(track) as Song;
-                    const saved = await client.musicPlaylistAddTrack(playlistId, plain);
+                    const saved = await client.musicPlaylistAddTrack(playlistId, plain, undefined, getDownloadQuality());
                     this.update(playlistId, (p) => ({
                         ...p,
                         tracks: p.tracks.some((t) => t.id === saved.id)
