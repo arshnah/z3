@@ -16,13 +16,21 @@ import com.getcapacitor.Plugin;
 import com.getcapacitor.PluginCall;
 import com.getcapacitor.PluginMethod;
 import com.getcapacitor.annotation.CapacitorPlugin;
+import com.google.common.util.concurrent.Futures;
 import com.google.common.util.concurrent.ListenableFuture;
+import com.google.common.util.concurrent.SettableFuture;
+import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.TimeoutException;
 import java.util.function.Consumer;
 
 @CapacitorPlugin(name = "ZetaPlayer")
 public class ZetaPlayerPlugin extends Plugin {
+    private static volatile ZetaPlayerPlugin onlineBridge;
+    private final ConcurrentHashMap<String, SettableFuture<String>> onlineRequests = new ConcurrentHashMap<>();
     private ListenableFuture<MediaController> connecting;
     private MediaController controller;
+    private volatile boolean onlineBridgeReady;
     private final Handler handler = new Handler(Looper.getMainLooper());
     private final Runnable ticker = new Runnable() {
         @Override public void run() {
@@ -33,6 +41,7 @@ public class ZetaPlayerPlugin extends Plugin {
 
     @Override
     public void load() {
+        onlineBridge = this;
         getActivity().runOnUiThread(() -> {
             SessionToken token = new SessionToken(getContext(), new ComponentName(getContext(), PlaybackService.class));
             connecting = new MediaController.Builder(getContext(), token).buildAsync();
@@ -56,6 +65,64 @@ public class ZetaPlayerPlugin extends Plugin {
                 }
             }, ContextCompat.getMainExecutor(getContext()));
         });
+    }
+
+    static ListenableFuture<String> requestOnline(String event, JSObject payload) {
+        ZetaPlayerPlugin bridge = onlineBridge;
+        if (bridge == null || !bridge.onlineBridgeReady) {
+            return Futures.immediateFailedFuture(
+                new IllegalStateException("Open Zeta on your phone to use online Android Auto search and playback."));
+        }
+
+        String requestId = UUID.randomUUID().toString();
+        SettableFuture<String> result = SettableFuture.create();
+        bridge.onlineRequests.put(requestId, result);
+        payload.put("requestId", requestId);
+        bridge.handler.post(() -> {
+            if (!result.isDone()) bridge.notifyListeners(event, payload, true);
+        });
+        bridge.handler.postDelayed(() -> {
+            if (bridge.onlineRequests.remove(requestId, result)) {
+                result.setException(new TimeoutException("The online music request timed out."));
+            }
+        }, 45_000);
+        return result;
+    }
+
+    @PluginMethod
+    public void setOnlineBridgeReady(PluginCall call) {
+        onlineBridgeReady = call.getBoolean("ready", false);
+        call.resolve();
+    }
+
+    @PluginMethod
+    public void completeOnlineRequest(PluginCall call) {
+        completeOnlineRequest(call, null);
+    }
+
+    @PluginMethod
+    public void failOnlineRequest(PluginCall call) {
+        completeOnlineRequest(call, call.getString("error", "The online music request failed."));
+    }
+
+    private void completeOnlineRequest(PluginCall call, String error) {
+        String requestId = call.getString("requestId");
+        SettableFuture<String> result = requestId == null ? null : onlineRequests.remove(requestId);
+        if (result == null) {
+            call.reject("The Android Auto request has expired.");
+            return;
+        }
+        if (error != null) {
+            result.setException(new IllegalStateException(error));
+        } else {
+            String response = call.getString("result");
+            if (response == null) {
+                result.setException(new IllegalArgumentException("The online music response was empty."));
+            } else {
+                result.set(response);
+            }
+        }
+        call.resolve();
     }
 
     private void run(PluginCall call, Consumer<MediaController> action) {
@@ -120,6 +187,12 @@ public class ZetaPlayerPlugin extends Plugin {
 
     @Override
     protected void handleOnDestroy() {
+        onlineBridgeReady = false;
+        if (onlineBridge == this) onlineBridge = null;
+        for (SettableFuture<String> request : onlineRequests.values()) {
+            request.setException(new IllegalStateException("The Zeta app was closed during the online music request."));
+        }
+        onlineRequests.clear();
         handler.removeCallbacks(ticker);
         if (connecting != null) MediaController.releaseFuture(connecting);
         controller = null;
