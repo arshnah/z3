@@ -709,4 +709,57 @@
             max-width: 240px;
         }
     }
+    @media (max-width: 600px) {
+        :global([data-os="android"]) .hero {
+            gap: 20px;
+            padding: 26px 22px 24px;
+            margin-top: 4px;
+            border-radius: 26px;
+        }
+        :global([data-os="android"]) .hero-text {
+            gap: 12px;
+        }
+        :global([data-os="android"]) .hero .page-title {
+            max-width: 12ch;
+            font-size: clamp(34px, 9.5vw, 40px);
+            line-height: 1;
+        }
+        :global([data-os="android"]) .hero .intro {
+            max-width: 36ch;
+            font-size: 14px;
+            line-height: 1.55;
+        }
+        :global([data-os="android"]) .hero-actions {
+            width: 100%;
+            gap: 8px;
+            margin-top: 4px;
+        }
+        :global([data-os="android"]) .hero-actions .btn {
+            justify-content: center;
+            min-height: 46px;
+            padding-inline: 16px;
+            border-radius: 15px;
+        }
+        :global([data-os="android"]) .section {
+            margin-top: 30px;
+        }
+        :global([data-os="android"]) .section-head {
+            align-items: flex-end;
+            gap: 10px;
+            margin-bottom: 8px;
+        }
+        :global([data-os="android"]) .section-title {
+            font-size: 20px;
+        }
+        :global([data-os="android"]) .section-sub {
+            font-size: 11.5px;
+        }
+        :global([data-os="android"]) .shelf {
+            grid-auto-columns: 150px;
+            gap: 14px;
+            padding: 12px 18px 20px;
+            margin: -12px -18px -20px;
+            scroll-padding-inline: 18px;
+        }
+    }
 </style>

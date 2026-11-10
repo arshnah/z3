@@ -506,4 +506,35 @@
             max-width: 220px;
         }
     }
+    @media (max-width: 600px) {
+        :global([data-os="android"]) .results-head {
+            margin: 4px 0 20px;
+        }
+        :global([data-os="android"]) .results-head .page-title {
+            font-size: clamp(32px, 9vw, 40px);
+        }
+        :global([data-os="android"]) .results-grid {
+            gap: 14px;
+        }
+        :global([data-os="android"]) .top {
+            gap: 7px;
+            padding: 14px;
+            border-radius: 22px;
+        }
+        :global([data-os="android"]) .top-art {
+            width: min(58vw, 210px);
+            margin: 0 auto 6px;
+            border-radius: 18px;
+        }
+        :global([data-os="android"]) .top-title {
+            font-size: 23px;
+        }
+        :global([data-os="android"]) .list-actions {
+            position: sticky;
+            top: 146px;
+            z-index: 3;
+            padding: 7px 0;
+            background: linear-gradient(var(--bg) 70%, transparent);
+        }
+    }
 </style>
