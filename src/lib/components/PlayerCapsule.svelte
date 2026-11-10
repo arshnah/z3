@@ -479,8 +479,32 @@
         padding-bottom: 3px;
     }
     @media (max-width: 600px) {
+        :global([data-os="android"]) .capsule {
+            width: calc(100vw - 24px);
+            padding: 6px;
+            border-radius: 22px;
+            background: rgb(12 10 18 / 0.96);
+            box-shadow: 0 16px 40px -18px rgb(0 0 0 / 0.9), inset 0 1px 0 rgb(255 255 255 / 0.09);
+        }
         :global([data-os="android"]) .tools { flex-wrap: wrap; justify-content: center; }
         :global([data-os="android"]) .vol { display: none; }
         :global([data-os="android"]) .main > .icon-btn { width: 32px; flex-shrink: 0; }
+        :global([data-os="android"]) .idle {
+            width: 100%;
+            min-width: 0;
+            gap: 10px;
+            padding-right: 10px;
+            font-size: 12px;
+        }
+        :global([data-os="android"]) .idle > span:not(.idle-mark) {
+            flex: 1;
+            min-width: 0;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        :global([data-os="android"]) .idle-mark,
+        :global([data-os="android"]) .idle > :global(svg) {
+            flex-shrink: 0;
+        }
     }
 </style>

@@ -301,7 +301,10 @@
 
         <div class="tail">
             <button class="icon-btn sm" title="Keyboard shortcuts (?)" onclick={() => (ui.shortcutsOpen = true)}><Icon name="keyboard" /></button>
-            <a class="icon-btn sm" class:on={isActive("/music/settings")} title="Settings" href="/music/settings"><Icon name="settings-2" /></a>
+            <a class="icon-btn sm" class:on={isActive("/music/settings")} aria-label="Settings" title="Settings" href="/music/settings">
+                <Icon name="settings-2" />
+                <span class="android-nav-label">Settings</span>
+            </a>
         </div>
     </nav>
 
@@ -664,6 +667,7 @@
         background: rgb(16 13 24 / 0.85);
         box-shadow: var(--shadow-lg);
     }
+    .android-nav-label { display: none; }
     :global([data-os="android"]) .dock-wrap {
         top: calc(env(safe-area-inset-top, 0px) + 8px);
         width: calc(100vw - 24px);
@@ -835,44 +839,86 @@
         :global([data-os="android"]) .dock {
             width: calc(100vw - 28px);
             height: auto;
-            min-height: 100px;
+            min-height: 0;
             flex-wrap: wrap;
-            gap: 4px;
-            padding: 7px;
-            border-radius: 20px;
+            align-content: flex-start;
+            gap: 4px 2px;
+            padding: 8px;
+            border: 1px solid rgb(255 255 255 / 0.12);
+            border-radius: 22px;
+            background: rgb(12 10 18 / 0.94);
+            box-shadow: 0 18px 44px -22px rgb(0 0 0 / 0.9), inset 0 1px 0 rgb(255 255 255 / 0.08);
         }
         :global([data-os="android"]) .items { display: contents; }
         :global([data-os="android"]) .search {
             order: 2;
             width: 100%;
-            flex-basis: 100%;
-            margin-top: 2px;
+            flex: 0 0 100%;
+            margin-top: 4px;
             padding-left: 12px;
+            border-radius: 15px;
+            background: rgb(255 255 255 / 0.075);
+            box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.08);
         }
         :global([data-os="android"]) .lib { order: 1; }
-        :global([data-os="android"]) .items > .item { order: 1; }
-        :global([data-os="android"]) .tail { order: 1; margin-left: auto; padding-left: 0; }
-        :global([data-os="android"]) .item {
-            gap: 5px;
-            height: 44px;
-            padding: 0 8px;
-            border-radius: 13px;
-        }
-        :global([data-os="android"]) .item :global(svg) {
-            width: 17px;
-            height: 17px;
-        }
+        :global([data-os="android"]) .items > .item,
+        :global([data-os="android"]) .lib > .item,
         :global([data-os="android"]) .tail > a {
-            width: 44px;
-            height: 44px;
+            order: 1;
+            display: flex;
+            flex: 1 1 0;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            gap: 4px;
+            min-width: 0;
+            height: 54px;
+            padding: 4px 2px;
+            border-radius: 15px;
+            color: var(--text-3);
         }
-        :global([data-os="android"]) .provider-picker { max-width: 124px; }
+        :global([data-os="android"]) .tail { display: contents; }
+        :global([data-os="android"]) .item {
+            font-size: 11.5px;
+            font-weight: 650;
+            letter-spacing: 0;
+        }
+        :global([data-os="android"]) .item.active,
+        :global([data-os="android"]) .tail > a.on {
+            color: var(--accent);
+            background: color-mix(in srgb, var(--accent) 13%, transparent);
+        }
+        :global([data-os="android"]) .item span,
+        :global([data-os="android"]) .android-nav-label {
+            display: block;
+            overflow: hidden;
+            max-width: 100%;
+            font-size: 11px;
+            line-height: 1.1;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        :global([data-os="android"]) .item :global(svg),
+        :global([data-os="android"]) .tail > a :global(svg) {
+            width: 19px;
+            height: 19px;
+        }
+        :global([data-os="android"]) .provider-picker { max-width: 118px; }
+        :global([data-os="android"]) .provider-picker summary {
+            min-height: 38px;
+            gap: 4px;
+            padding-inline: 9px;
+            border-radius: 12px;
+            background: rgb(255 255 255 / 0.075);
+        }
+        :global([data-os="android"]) .provider-picker summary span { font-size: 11px; }
         :global([data-os="android"]) .suggestions {
             width: 100%;
-            max-height: min(52vh, 420px);
+            max-height: min(54vh, 440px);
             overflow-y: auto;
             border: 1px solid var(--border-strong);
-            background: rgb(16 13 24 / 0.97);
+            border-radius: 20px;
+            background: rgb(12 10 18 / 0.98);
         }
         :global([data-os="android"]) .sugg { min-height: 48px; }
         :global([data-os="android"]) .quick-sugg { min-height: 56px; }
