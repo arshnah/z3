@@ -99,6 +99,62 @@
     const sleepLeft = $derived(typeof ui.sleepAt === "number" ? Math.max(0, Math.ceil((ui.sleepAt - now) / 60000)) : null);
 </script>
 
+{#if ui.lite}
+    <!-- Lite mode: a flat, full-width bar. No hover expansion, glow, art morph or lyric ticker. -->
+    <div class="lite-bar">
+        {#if track}
+            <div class="lb-left">
+                <button class="lb-art" title="Open player (F)" onclick={() => ui.openNowPlaying()}>
+                    <Cover thumbnails={track.thumbnails} title={track.title} size="100%" radius="0" />
+                </button>
+                <button class="lb-info" onclick={() => ui.openNowPlaying()}>
+                    <span class="lb-title ellipsis" title={track.title}>{track.title}</span>
+                    <span class="lb-artist ellipsis">{artistNames(track)}</span>
+                </button>
+                <button class="icon-btn sm fav lb-fav" class:is-fav={fav} title="Favourite" onclick={() => libraryState.toggleFavourite(track)}>
+                    <Icon name="heart" />
+                </button>
+            </div>
+
+            <div class="lb-center">
+                <div class="lb-transport">
+                    <button class="icon-btn sm" title="Previous" onclick={previousTrack}><Icon name="skip-back" /></button>
+                    <button class="lb-play" title="Play/Pause (Space)" disabled={playerState.isLoading} onclick={togglePlay}>
+                        {#if playerState.isLoading}
+                            <span class="spin"><Icon name="loader-circle" /></span>
+                        {:else}
+                            <Icon name={playerState.paused ? "play" : "pause"} />
+                        {/if}
+                    </button>
+                    <button class="icon-btn sm" title="Next" disabled={!isNextTrackAvailable()} onclick={nextTrack}><Icon name="skip-forward" /></button>
+                </div>
+                <div class="lb-seek">
+                    <span class="lb-time">{formatTime(playerState.currentTime)}</span>
+                    <div class="lb-slider">
+                        <Slider value={playerState.currentTime} max={playerState.duration || 0} onchange={seek} format={formatTime} disabled={!playerState.duration} label="Seek" />
+                    </div>
+                    <span class="lb-time">{formatTime(playerState.duration || track.duration || 0)}</span>
+                </div>
+            </div>
+
+            <div class="lb-right">
+                <button class="icon-btn sm" class:on={playerState.shuffle} title="Shuffle (S)" onclick={toggleShuffle}><Icon name="shuffle" /></button>
+                <button class="icon-btn sm" class:on={playerState.repeat !== "off"} title="Repeat: {playerState.repeat} (R)" onclick={cycleRepeat}>
+                    <Icon name={playerState.repeat === "one" ? "repeat-1" : "repeat"} />
+                </button>
+                <button class="icon-btn sm" class:on={ui.sidePanel === "lyrics"} title="Lyrics (Y)" onclick={() => ui.toggleSidePanel("lyrics")}><Icon name="mic-vocal" /></button>
+                <button class="icon-btn sm" class:on={ui.sidePanel === "queue"} title="Queue (Q)" onclick={() => ui.toggleSidePanel("queue")}><Icon name="list-music" /></button>
+                <button class="icon-btn sm" title="Mute (M)" onclick={toggleMute}><Icon name={volumeIcon} /></button>
+                <div class="lb-vol">
+                    <Slider value={playerState.muted ? 0 : playerState.volume} max={1} live onchange={setVolume} format={(v) => `${Math.round(v * 100)}%`} label="Volume" />
+                </div>
+                <button class="icon-btn sm" title="More" onclick={(e) => ui.openMenuAt(e.currentTarget, trackMenu(track, { playlist: playerState.currentPlaylist }))}><Icon name="ellipsis" /></button>
+            </div>
+        {:else}
+            <a class="lb-idle" href="/music/search">Nothing playing. Find something to listen to</a>
+        {/if}
+    </div>
+{:else}
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div
     class="capsule"
@@ -209,6 +265,7 @@
         </a>
     {/if}
 </div>
+{/if}
 
 <style>
     .capsule {
@@ -505,6 +562,124 @@
         :global([data-os="android"]) .idle-mark,
         :global([data-os="android"]) .idle > :global(svg) {
             flex-shrink: 0;
+        }
+    }
+    /* --- lite mode bar: flat, full width, docked to the bottom --------------- */
+    .lite-bar {
+        position: fixed;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        z-index: 60;
+        height: 68px;
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) minmax(300px, 540px) minmax(0, 1fr);
+        align-items: center;
+        gap: 16px;
+        padding: 0 16px;
+        background: var(--bg-raised);
+        border-top: 1px solid var(--border-strong);
+    }
+    .lb-left {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        min-width: 0;
+    }
+    .lb-art {
+        flex: none;
+        width: 44px;
+        height: 44px;
+        padding: 0;
+        border-radius: var(--r-sm);
+        overflow: hidden;
+        background: var(--surface-2);
+    }
+    .lb-info {
+        display: flex;
+        flex-direction: column;
+        gap: 1px;
+        min-width: 0;
+        padding: 0;
+        text-align: left;
+        background: none;
+    }
+    .lb-title {
+        font-size: 13.5px;
+        font-weight: 600;
+        color: var(--text);
+    }
+    .lb-artist {
+        font-size: 12px;
+        color: var(--text-3);
+    }
+    .lb-center {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 3px;
+        min-width: 0;
+    }
+    .lb-transport {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+    }
+    .lb-play {
+        display: grid;
+        place-items: center;
+        width: 32px;
+        height: 32px;
+        padding: 0;
+        border-radius: 50%;
+        background: var(--text);
+        color: #000;
+    }
+    .lb-play:hover:not(:disabled) {
+        background: #fff;
+    }
+    .lb-seek {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        width: 100%;
+    }
+    .lb-slider {
+        flex: 1;
+        min-width: 0;
+    }
+    .lb-time {
+        min-width: 34px;
+        font-size: 11px;
+        font-variant-numeric: tabular-nums;
+        color: var(--text-3);
+        text-align: center;
+    }
+    .lb-right {
+        display: flex;
+        align-items: center;
+        justify-content: flex-end;
+        gap: 2px;
+        min-width: 0;
+    }
+    .lb-vol {
+        width: 88px;
+        margin: 0 6px;
+    }
+    .lb-idle {
+        grid-column: 1 / -1;
+        color: var(--text-2);
+        font-size: 13px;
+    }
+    @media (max-width: 900px) {
+        .lite-bar {
+            grid-template-columns: minmax(0, 1fr) auto;
+        }
+        .lb-right {
+            display: none;
+        }
+        .lb-center {
+            min-width: 220px;
         }
     }
 </style>

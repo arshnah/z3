@@ -45,7 +45,7 @@
     <div class="backdrop" transition:fade={{ duration: 180 }} onclick={(e) => e.target === e.currentTarget && close(null)}>
         <form
             class="dialog glass"
-            use:liquidGlass={{ enabled: ui.liquidGlass, depth: 12, blur: 12 }}
+            use:liquidGlass={{ enabled: ui.glassOn, depth: 12, blur: 12 }}
             onsubmit={submit}
             transition:scale={{ start: 0.92, duration: 260, opacity: 0 }}
         >

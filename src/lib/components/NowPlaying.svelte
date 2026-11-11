@@ -260,7 +260,7 @@
                             </div>
                         {/key}
                         {#if pack.id === "halo"}
-                            <div class="disc framed" class:spinning={!playerState.paused}>
+                            <div class="disc framed" class:spinning={!playerState.paused && !ui.lite}>
                                 <Cover src={artSrc} thumbnails={track.thumbnails} title={track.title} size="100%" radius="50%" />
                             </div>
                         {/if}
@@ -340,6 +340,7 @@
 </div>
 
 {#snippet visualizer()}
+    {#if !ui.lite}
     <ShaderCanvas
         {pack}
         onerror={(err) => {
@@ -347,6 +348,7 @@
             if (pack.id !== "halo") setPack("halo");
         }}
     />
+    {/if}
 {/snippet}
 
 {#snippet meta()}

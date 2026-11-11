@@ -3,6 +3,7 @@ import { client } from "$lib/ephaptic";
 import type { Song } from "$lib/schema";
 import { coverCrop, updateThumbnailUrl } from "$lib/utils";
 import { isCoverUrl } from "$lib/covers";
+import { ui } from "$lib/state/ui.svelte";
 
 export type RGB = [number, number, number];
 
@@ -20,6 +21,16 @@ export const DEFAULT_PALETTE: Palette = {
         [34, 26, 72],
     ],
     accent: [180, 155, 255],
+};
+
+/** Lite mode's fixed theme: greys only, never recoloured by the cover. */
+const LITE_PALETTE: Palette = {
+    colors: [
+        [48, 48, 48],
+        [64, 64, 64],
+        [24, 24, 24],
+    ],
+    accent: [235, 235, 235],
 };
 
 /* ------------------------------ colour maths ------------------------------ */
@@ -234,7 +245,13 @@ class ArtworkStore {
         this.brightness = art?.brightness ?? 0.3;
         this.palette = palette;
         this.version++;
+        this.restyle();
+    }
+
+    /** Push the palette into the CSS theme vars. Lite mode uses a fixed grey theme, so nothing recolours per song. */
+    restyle() {
         if (!browser) return;
+        const palette = ui.lite ? LITE_PALETTE : this.palette;
         const root = document.documentElement.style;
         root.setProperty("--art-1", css(palette.colors[0]));
         root.setProperty("--art-2", css(palette.colors[1]));

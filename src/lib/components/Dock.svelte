@@ -182,7 +182,7 @@
 <svelte:window onclick={closeProviderPicker} onkeydown={handleProviderEscape} />
 
 <div class="dock-wrap">
-    <nav class="dock" class:searching={onSearch} use:liquidGlass={{ enabled: ui.liquidGlass, depth: 10, blur: 9 }}>
+    <nav class="dock" class:searching={onSearch} use:liquidGlass={{ enabled: ui.glassOn, depth: 10, blur: 9 }}>
         <a
             class="mark"
             class:home-active={isActive("/music")}

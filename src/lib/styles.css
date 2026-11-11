@@ -673,6 +673,211 @@ button:disabled {
     }
 }
 
+/* ==========================================================================
+   Lite mode: a flat, monochrome UI for weak hardware. No gradients, blur,
+   glow, tilt or album-art tinting. Motion is limited to short fades/slides
+   of opacity and transform, which the GPU handles for free.
+   ========================================================================== */
+:root.lite {
+    --font: "Inter Variable", "Inter", system-ui, "Segoe UI", Roboto, sans-serif;
+    --font-display: var(--font);
+
+    --bg: #000;
+    --bg-raised: #0c0c0c;
+    --surface-1: #101010;
+    --surface-2: #171717;
+    --surface-3: #202020;
+    --surface-4: #2b2b2b;
+    --glass: #0c0c0c;
+    --glass-strong: #0c0c0c;
+    --border: #242424;
+    --border-strong: #3a3a3a;
+
+    --text: #f2f2f2;
+    --text-2: #b4b4b4;
+    --text-3: #818181;
+    --text-4: #5a5a5a;
+
+    --accent-soft: rgb(255 255 255 / 0.08);
+    --accent-glow: transparent;
+    --on-accent: #000;
+
+    --r-xs: 3px;
+    --r-sm: 5px;
+    --r-md: 7px;
+    --r-lg: 9px;
+    --r-xl: 12px;
+
+    --shadow-sm: none;
+    --shadow-md: none;
+    --shadow-lg: none;
+    --shadow-cover: none;
+}
+:root.lite *,
+:root.lite *::before,
+:root.lite *::after {
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+    filter: none !important;
+    text-shadow: none !important;
+    /* quick, cheap motion: only compositor-friendly properties animate */
+    animation-duration: 0.18s !important;
+    animation-delay: 0s !important;
+    transition-duration: 0.15s !important;
+    transition-delay: 0s !important;
+    transition-timing-function: ease-out !important;
+    transition-property: opacity, transform, translate, scale, background-color, color, border-color !important;
+}
+/* no gradients (cover placeholders carry their image inline and are kept) */
+:root.lite *:not([style*="url("]),
+:root.lite *::before,
+:root.lite *::after {
+    background-image: none !important;
+}
+
+/* loaders and the playing bars keep their own looping speed */
+:root.lite .spin,
+:root.lite .spin svg,
+:root.lite .suggestions-loading svg {
+    animation-duration: 0.9s !important;
+}
+:root.lite .eq i {
+    animation-duration: 0.9s !important;
+}
+:root.lite .eq i:nth-child(2) {
+    animation-duration: 1.07s !important;
+    animation-delay: -0.4s !important;
+}
+:root.lite .eq i:nth-child(3) {
+    animation-duration: 0.71s !important;
+    animation-delay: -0.2s !important;
+}
+:root.lite .eq i:nth-child(4) {
+    animation-duration: 0.96s !important;
+    animation-delay: -0.6s !important;
+}
+/* decorative loops off */
+:root.lite .disc,
+:root.lite .playing .art-inner,
+:root.lite .dots,
+:root.lite .skeleton,
+:root.lite .recommendation-skeleton,
+:root.lite .blob {
+    animation: none !important;
+}
+:root.lite .glow,
+:root.lite .shine {
+    display: none !important;
+}
+
+/* flat surfaces */
+:root.lite .card,
+:root.lite .island,
+:root.lite .stat {
+    background-color: var(--surface-1) !important;
+    border: 1px solid var(--border) !important;
+}
+:root.lite .glass,
+:root.lite .dock,
+:root.lite .panel,
+:root.lite .sheet,
+:root.lite .capsule {
+    background-color: var(--bg-raised) !important;
+    border: 1px solid var(--border-strong) !important;
+}
+:root.lite .card,
+:root.lite .island,
+:root.lite .glass,
+:root.lite .dock,
+:root.lite .panel,
+:root.lite .sheet,
+:root.lite .capsule,
+:root.lite .face,
+:root.lite .art-inner,
+:root.lite .disc {
+    box-shadow: none !important;
+}
+:root.lite .skeleton,
+:root.lite .recommendation-skeleton {
+    background-color: var(--surface-2) !important;
+}
+:root.lite .vis-bottom {
+    background-color: rgb(0 0 0 / 0.7) !important;
+}
+:root.lite .video-picks-label {
+    background-color: var(--bg-raised) !important;
+}
+:root.lite .track.current {
+    background-color: var(--surface-3) !important;
+}
+:root.lite .bar i {
+    background-color: var(--accent) !important;
+}
+
+/* cards: no 3D tilt; a small lift and an outline instead of glows */
+:root.lite .media-card .face {
+    transform: none !important;
+}
+:root.lite .media-card:hover .face {
+    translate: 0 -2px !important;
+    outline: 1px solid var(--border-strong);
+}
+:root.lite .playing .face {
+    outline: 2px solid var(--accent);
+    outline-offset: -2px;
+}
+
+/* neutral black everywhere: the app's own purple-tinted bases become plain black/grey */
+:root.lite .ambient {
+    background: #000 !important;
+}
+:root.lite .label,
+:root.lite .popover,
+:root.lite .suggestions,
+:root.lite .options,
+:root.lite .create,
+:root.lite .mood {
+    background-color: var(--bg-raised) !important;
+}
+
+/* logo: the gradient disc becomes a plain light disc */
+:root.lite .mark,
+:root.lite .idle-mark {
+    background-color: var(--text) !important;
+    color: #000 !important;
+}
+
+/* calmer type: lighter headings, normal tracking */
+:root.lite h1,
+:root.lite h2,
+:root.lite h3 {
+    font-weight: 650 !important;
+    letter-spacing: -0.015em !important;
+}
+
+/* stations: plain round covers instead of the record look */
+:root.lite .vinyl {
+    background: none !important;
+}
+:root.lite .grooves {
+    display: none !important;
+}
+:root.lite .label-art {
+    inset: 0 !important;
+    box-shadow: none !important;
+}
+:root.lite .vinyl:hover .label-art {
+    transform: none !important;
+}
+
+/* gradient-clipped text would turn invisible without its gradient */
+:root.lite .line.active .word,
+:root.lite h1 span {
+    color: var(--text) !important;
+    -webkit-background-clip: border-box !important;
+    background-clip: border-box !important;
+}
+
 /* Kept for pages that still use it. */
 .hidden {
     display: none !important;

@@ -37,7 +37,7 @@
 
     onMount(() =>
         analyser.subscribe((f) => {
-            if (hidden || !ui.ambient) return;
+            if (hidden || !ui.ambientOn) return;
             blobEls.forEach((el, i) => {
                 if (!el) return;
                 const [bass, kick] = RESPONSE[i];
@@ -57,7 +57,7 @@
 </script>
 
 <div class="ambient" aria-hidden="true">
-    {#if ui.ambient && !hidden}
+    {#if ui.ambientOn && !hidden}
         <div class="art-wrap" bind:this={artEl}>
             {#key artworkState.blurred}
                 <div

@@ -69,7 +69,7 @@
     </div>
 {/snippet}
 
-<aside class="panel" use:liquidGlass={{ enabled: ui.liquidGlass, depth: 16, blur: 11 }} transition:fly={{ x: 60, duration: 420, opacity: 0 }}>
+<aside class="panel" use:liquidGlass={{ enabled: ui.glassOn, depth: 16, blur: 11 }} transition:fly={{ x: 60, duration: 420, opacity: 0 }}>
     <header>
         <div class="segmented">
             <button aria-pressed={ui.sidePanel === "queue"} onclick={() => (ui.sidePanel = "queue")}>

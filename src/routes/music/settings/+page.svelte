@@ -153,6 +153,22 @@
         <div class="card rows">
             <div class="row">
                 <div>
+                    <strong>Lite mode</strong>
+                    <p>For slower PCs. Turns off the living background, liquid glass, visualizers and animations.</p>
+                </div>
+                <button
+                    class="switch"
+                    role="switch"
+                    aria-label="Lite mode"
+                    aria-checked={ui.lite}
+                    onclick={() => {
+                        ui.lite = !ui.lite;
+                        ui.save();
+                    }}
+                ></button>
+            </div>
+            <div class="row">
+                <div>
                     <strong>Living background</strong>
                     <p>Let the current album art flow behind the whole app. Turn off to save battery.</p>
                 </div>
