@@ -408,7 +408,7 @@ public class PlaybackService extends MediaLibraryService {
     private MediaItem folder(String id, String title) {
         MediaMetadata metadata = new MediaMetadata.Builder()
             .setTitle(title)
-            .setMediaType(MediaMetadata.MEDIA_TYPE_FOLDER)
+            .setMediaType(MediaMetadata.MEDIA_TYPE_FOLDER_MIXED)
             .setIsBrowsable(true)
             .setIsPlayable(false)
             .build();
