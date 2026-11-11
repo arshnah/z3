@@ -511,4 +511,19 @@
             flex-shrink: 0;
         }
     }
+    /* lite mode: a very light open/close instead of an instant snap. The width and
+       corner radius ease over 180ms (one small fixed element), and the border
+       brightens a touch under the pointer. */
+    :global(:root.lite) .capsule {
+        transition-property: width, border-radius, opacity, transform, background-color, border-color !important;
+        transition-duration: 0.18s !important;
+        transition-timing-function: ease-out !important;
+    }
+    :global(:root.lite) .capsule:hover {
+        border-color: var(--text-4) !important;
+    }
+    :global(:root.lite) .capsule .play:active,
+    :global(:root.lite) .capsule .icon-btn:active {
+        transform: scale(0.92);
+    }
 </style>
