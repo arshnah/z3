@@ -3,6 +3,7 @@ import type { JSZipObject } from 'jszip';
 import type { Artist, Song, Thumbnail } from './schema';
 
 export const MAX_BACKUP_BYTES = 128 * 1024 * 1024;
+export const BACKUP_AUDIO_LIMIT_MESSAGE = 'Offline audio exceeds the 128 MiB backup limit.';
 const MAX_MANIFEST_BYTES = 16 * 1024 * 1024;
 const MANIFEST = 'zeta.msgpack';
 const AUDIO_TYPES: Record<string, string> = {
@@ -72,24 +73,24 @@ function text(value: unknown): string {
     return typeof value === 'string' ? value : '';
 }
 
-function cleanThumbnails(value: unknown): Thumbnail[] {
+function cleanThumbnails(value: unknown, embedded: boolean): Thumbnail[] {
     if (!Array.isArray(value)) return [];
     return value.flatMap((thumb: Thumbnail | null) => {
         if (!thumb) return [];
         const url = backupImage(thumb.url);
-        const data = thumb.data instanceof Uint8Array && thumb.data.length ? thumb.data : undefined;
+        const data = embedded && thumb.data instanceof Uint8Array && thumb.data.length ? thumb.data : undefined;
         if (!url && !data) return [];
         const mimetype = /^image\/(?:jpeg|png|webp|gif|avif)$/i.test(thumb.mimetype ?? '') ? thumb.mimetype : 'image/jpeg';
         return [{ url, data, mimetype, width: Number(thumb.width) || undefined, height: Number(thumb.height) || undefined }];
     });
 }
 
-function cleanArtists(value: unknown): Artist[] {
+function cleanArtists(value: unknown, embedded: boolean): Artist[] {
     return Array.isArray(value) ? value.filter((artist) => artist && typeof artist.name === 'string')
-        .map((artist) => ({ id: text(artist.id) || undefined, name: artist.name, thumbnails: cleanThumbnails(artist.thumbnails) })) : [];
+        .map((artist) => ({ id: text(artist.id) || undefined, name: artist.name, thumbnails: cleanThumbnails(artist.thumbnails, embedded) })) : [];
 }
 
-function cleanSong(song: Song): Song {
+function cleanSong(song: Song, embedded = true): Song {
     if (!song || typeof song.id !== 'string' || !/^(yt|js|local|fs):[^\x00-\x1f\x7f]+$/.test(song.id) ||
         song.id.length > 2048 || /^(local|fs):([/\\]|[a-z]:)/i.test(song.id) ||
         song.id.slice(song.id.indexOf(':') + 1).split(/[/\\]/).includes('..')) {
@@ -97,12 +98,12 @@ function cleanSong(song: Song): Song {
     }
     const album = song.album;
     return {
-        id: song.id, title: text(song.title) || 'Untitled', artists: cleanArtists(song.artists),
+        id: song.id, title: text(song.title) || 'Untitled', artists: cleanArtists(song.artists, embedded),
         album: album && typeof album.title === 'string' ? {
             title: album.title, id: text(album.id) || undefined, year: text(album.year) || undefined,
-            artists: cleanArtists(album.artists), thumbnails: cleanThumbnails(album.thumbnails),
+            artists: cleanArtists(album.artists, embedded), thumbnails: cleanThumbnails(album.thumbnails, embedded),
         } : null,
-        thumbnails: cleanThumbnails(song.thumbnails),
+        thumbnails: cleanThumbnails(song.thumbnails, embedded),
         duration: Number.isFinite(song.duration) ? Math.max(0, song.duration) : 0,
         year: text(song.year) || undefined, lyrics: text(song.lyrics) || undefined, isDownloaded: false,
     };
@@ -163,6 +164,7 @@ export function readBackupEntry(file: JSZipObject, limit: number): Promise<Uint8
 export async function makeZetaBackup(
     data: BackupManifest,
     getAudio: (entry: BackupSong) => Promise<Uint8Array | undefined>,
+    includeArtwork = true,
 ): Promise<Uint8Array> {
     const { default: JSZip } = await import('jszip');
     const zip = new JSZip();
@@ -174,18 +176,21 @@ export async function makeZetaBackup(
         const audio = bytes?.length ? `audio/${songs.length}.${extension}` : undefined;
         if (audio && bytes) {
             size += bytes.length;
-            if (size >= MAX_BACKUP_BYTES) throw new Error('The backup exceeds 128 MiB. Reduce the offline audio included and try again.');
+            if (size >= MAX_BACKUP_BYTES) throw new Error(BACKUP_AUDIO_LIMIT_MESSAGE);
             zip.file(audio, bytes);
         }
-        songs.push({ song: cleanSong(entry.song), audio });
+        songs.push({ song: cleanSong(entry.song, includeArtwork), audio });
     }
-    const manifest = encode({ version: 1, ...data, songs }, { ignoreUndefined: true });
-    if (manifest.length > MAX_MANIFEST_BYTES || manifest.length + size > MAX_BACKUP_BYTES) {
-        throw new Error('The backup exceeds the supported size.');
+    const encodeManifest = (entries: BackupSong[]) => encode({ version: 1, ...data, songs: entries }, { ignoreUndefined: true });
+    let manifest = encodeManifest(songs);
+    if (includeArtwork && (manifest.length > MAX_MANIFEST_BYTES || manifest.length + size > MAX_BACKUP_BYTES)) {
+        manifest = encodeManifest(songs.map(({ song, audio }) => ({ song: cleanSong(song, false), audio })));
     }
+    if (manifest.length > MAX_MANIFEST_BYTES) throw new Error('The library metadata exceeds the 16 MiB backup limit.');
+    if (manifest.length + size > MAX_BACKUP_BYTES) throw new Error(BACKUP_AUDIO_LIMIT_MESSAGE);
     zip.file(MANIFEST, manifest, { compression: 'DEFLATE' });
     const result = await zip.generateAsync({ type: 'uint8array' });
-    if (result.length > MAX_BACKUP_BYTES) throw new Error('The backup exceeds the supported size.');
+    if (result.length > MAX_BACKUP_BYTES) throw new Error(BACKUP_AUDIO_LIMIT_MESSAGE);
     return result;
 }
 

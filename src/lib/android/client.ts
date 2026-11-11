@@ -1,6 +1,7 @@
 import { Capacitor, registerPlugin, type PluginListenerHandle } from '@capacitor/core';
 import { Directory, Filesystem } from '@capacitor/filesystem';
 import { FileTransfer } from '@capacitor/file-transfer';
+import type { NearbyEndpoint } from '../nearby-pairing';
 import type { Routes } from '../../../electron/main';
 import type { Library, Song, Stream } from '../schema';
 import { androidStorage as storage, MUSIC_PATH, rememberSong, requirePlaylist, type StoredSong } from './storage';
@@ -12,6 +13,12 @@ type LocatedSong = StoredSong & { directory: Directory };
 const rangedDownload = registerPlugin<{
     download(options: { url: string; path: string; size: number }): Promise<void>;
 }>('ZetaMediaDownload');
+const nearby = registerPlugin<{
+    listen(): Promise<NearbyEndpoint>;
+    receive(): Promise<{ packets: string[] }>;
+    close(): Promise<void>;
+    send(options: { addresses: string[]; port: number; packet: string }): Promise<void>;
+}>('ZetaNearby');
 const downloads = new Map<string, Promise<LocatedSong>>();
 const temporary = new Map<string, LocatedSong>();
 const files = registerPlugin<{ importAudio(): Promise<{ songs: StoredSong[] }> }>('ZetaFiles');
@@ -185,6 +192,10 @@ export async function importAudio(): Promise<void> {
 
 export const androidClient: Routes = {
     ...androidScrobbling,
+    nearbyListen: () => nearby.listen(),
+    nearbyReceive: async () => (await nearby.receive()).packets,
+    nearbyClose: () => nearby.close(),
+    nearbySend: (addresses, port, packet) => nearby.send({ addresses, port, packet }),
     updateStatus: async () => (await import('./updates')).updateRoutes.updateStatus(),
     checkForZetaUpdate: async () => (await import('./updates')).updateRoutes.checkForZetaUpdate(),
     applyZetaUpdate: async () => (await import('./updates')).updateRoutes.applyZetaUpdate(),

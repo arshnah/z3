@@ -42,8 +42,7 @@
     }
 
     async function useCode(value: string) {
-        if (peers.pending?.host) await peers.finish(value);
-        else await peers.join(value);
+        await peers.join(value);
         code = '';
     }
 
@@ -108,23 +107,25 @@
 
 <section class="card peer">
     <h2>Nearby devices</h2>
-    <p class="muted">Use the same Wi-Fi. Exchange an invitation and a reply by QR or pairing code.</p>
+    <p class="muted">Use the same local network. Scan the invitation once or paste its code.</p>
     <div class="buttons">
         <button class="btn" disabled={!!peers.pending || peers.busy} onclick={() => run(() => peers.invite('backup', includeAudio))}>Send Zeta backup by QR</button>
         <button class="btn" disabled={!!peers.pending || peers.busy} onclick={() => run(() => peers.invite('remote'))}>Pair remote control</button>
         <button class="btn" disabled={!!peers.pending || peers.busy} onclick={() => run(() => peers.invite('party'))}>Invite to play together</button>
     </div>
     {#if peers.pending}
-        <p>{peers.pending.host ? 'Scan this invitation on the other device.' : 'Scan this reply on the host.'}</p>
-        {#if qr}<img src={qr} alt={peers.pending.host ? 'Pairing invitation QR code' : 'Pairing reply QR code'} />{/if}
+        <p role="status">{peers.pending.host ? 'Scan this invitation on the other device.' : 'Connecting to the host…'}</p>
+        {#if qr}<img src={qr} alt="Pairing invitation QR code" />{/if}
         {#if qrTooLarge}<p class="muted">Use Copy code if this connection is too large for a QR code.</p>{/if}
         <div class="buttons">
-            <button class="btn" onclick={() => run(() => navigator.clipboard.writeText(peers.pending!.code))}>Copy code</button>
+            {#if peers.pending.code}
+                <button class="btn" onclick={() => run(() => navigator.clipboard.writeText(peers.pending!.code!))}>Copy code</button>
+            {/if}
             <button class="btn" onclick={() => peers.disconnect(peers.pending!.id)}>Cancel pairing</button>
         </div>
     {/if}
-    {#if !peers.pending || peers.pending.host}
-        <label for="peer-code">{peers.pending ? 'Reply code' : 'Invitation code'}</label>
+    {#if !peers.pending}
+        <label for="peer-code">Invitation code</label>
         <textarea id="peer-code" bind:value={code} rows="2"></textarea>
         <div class="buttons">
             <button class="btn" disabled={!code.trim() || peers.busy} onclick={() => run(() => useCode(code))}>Use code</button>

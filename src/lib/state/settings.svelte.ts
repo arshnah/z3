@@ -4,7 +4,7 @@ import { libraryState } from "$lib/state/library.svelte";
 import { toasts } from "$lib/state/toast.svelte";
 import { ui } from "$lib/state/ui.svelte";
 import { downloads } from "$lib/state/downloads.svelte";
-import { backupCounts, openZetaBackup } from "$lib/zeta-backup";
+import { BACKUP_AUDIO_LIMIT_MESSAGE, backupCounts, openZetaBackup } from "$lib/zeta-backup";
 import { duplicateSongs } from "$lib/library-tools";
 import {
     getDownloadQuality,
@@ -167,7 +167,18 @@ class SettingsStore {
                 if (bytes) await this.previewZetaBackup(bytes);
                 return;
             }
-            const result = await client.zetaExport(includeAudio);
+            let result;
+            try {
+                result = await client.zetaExport(includeAudio);
+            } catch (error) {
+                if (!includeAudio || !String(error).includes(BACKUP_AUDIO_LIMIT_MESSAGE)) throw error;
+                const saveLibrary = await ui.confirm('Save a library-only backup?', {
+                    message: 'The offline audio exceeds 128 MiB. You can still save your songs, playlists, favourites, and listening history.',
+                    confirmLabel: 'Save library backup',
+                });
+                if (!saveLibrary) return;
+                result = await client.zetaExport(false);
+            }
             if (result) toasts.success(`Saved ${result.songs} songs and ${result.playlists} playlists.`);
         } catch (err) {
             toasts.error(err);

@@ -3,7 +3,7 @@ import { Directory, Filesystem } from '@capacitor/filesystem';
 import type { Song, Thumbnail } from '../schema';
 import { buildMuzzaArchive, parseMuzzaArchive } from '../muzza-codec';
 import {
-    audioExtension, backupAudioMime, backupCounts, backupImage, backupPlaylistId, makeZetaBackup, MAX_BACKUP_BYTES,
+    audioExtension, backupAudioMime, BACKUP_AUDIO_LIMIT_MESSAGE, backupCounts, backupImage, backupPlaylistId, makeZetaBackup, MAX_BACKUP_BYTES,
     mergeBackupEvents, openZetaBackup, type BackupManifest, type BackupPlaylist,
 } from '../zeta-backup';
 import { androidStorage as storage, FAVOURITES_ID, MUSIC_PATH, rememberSong, requirePlaylist, type MobileLibrary, type StoredSong } from './storage';
@@ -146,8 +146,9 @@ async function zetaBackupBytes(includeAudio: boolean) {
             if (error.code !== 'OS-PLUG-FILE-0008') throw error;
             return null;
         });
+        if (found && found.size > MAX_BACKUP_BYTES) throw new Error(BACKUP_AUDIO_LIMIT_MESSAGE);
         if (found) return readBytes(Directory.Data, audio);
-    });
+    }, includeAudio);
     return { bytes, ...backupCounts(manifest) };
 }
 

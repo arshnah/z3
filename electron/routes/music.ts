@@ -34,7 +34,7 @@ import { findBrowserProfiles } from '../lib/browser-profiles';
 import { MetadataStore, embedMp4Tags, readAudioTags, type IndexRecord } from '../lib/metadata';
 import { buildMuzzaBackup, parseMuzzaBackup, readMuzzaEventsFromDb, type MuzzaEvent } from '../lib/muzza';
 import {
-    audioExtension, backupCounts, backupImage, backupPlaylistId, makeZetaBackup, MAX_BACKUP_BYTES, openZetaBackup, type BackupManifest,
+    audioExtension, backupCounts, backupImage, backupPlaylistId, makeZetaBackup, BACKUP_AUDIO_LIMIT_MESSAGE, MAX_BACKUP_BYTES, openZetaBackup, type BackupManifest,
 } from '../../src/lib/zeta-backup';
 import { StatsStore } from '../lib/stats';
 import { comparableText, lyricsfileToLrc } from '../lib/lyricsfile';
@@ -1829,9 +1829,9 @@ export const routes = {
             };
             const archive = await makeZetaBackup(manifest, async ({ audio }) => {
                 if (!audio || !(await vfs.exists(audio))) return undefined;
-                if ((await vfs.stat(audio)).size > MAX_BACKUP_BYTES) throw new Error('An audio file exceeds the backup size limit.');
+                if ((await vfs.stat(audio)).size > MAX_BACKUP_BYTES) throw new Error(BACKUP_AUDIO_LIMIT_MESSAGE);
                 return vfs.readFile(audio);
-            });
+            }, includeAudio);
             return { bytes: archive, ...backupCounts(manifest) };
         });
     },

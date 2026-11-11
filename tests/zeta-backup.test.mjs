@@ -40,6 +40,20 @@ test('Zeta backup import rejects audio paths outside their assigned entry', asyn
     await assert.rejects(openZetaBackup(await archive.generateAsync({ type: 'uint8array' })), /invalid audio entry/);
 });
 
+test('large embedded cover art does not prevent a backup with audio', async () => {
+    const url = 'https://example.com/cover.jpg';
+    const largeCover = { url, data: new Uint8Array(16 * 1024 * 1024) };
+    const audio = Uint8Array.of(1, 2, 3);
+    const backup = await makeZetaBackup({ ...manifest, songs: [{
+        ...manifest.songs[0], song: { ...song, thumbnails: [largeCover] },
+    }] }, async () => audio);
+    const restored = await openZetaBackup(backup);
+    assert.equal(restored.manifest.songs[0].song.thumbnails[0].url, url);
+    assert.equal(restored.manifest.songs[0].song.thumbnails[0].data, undefined);
+    assert.deepEqual(await restored.readAudio('audio/0.wav'), audio);
+    assert.deepEqual(restored.manifest.events, [event]);
+});
+
 test('GitHub updates require a newer stable version', () => {
     const release = { tag_name: 'v0.10.0', prerelease: false, draft: false, assets: [] };
     assert.equal(newerRelease(release, '0.5.2').version, '0.10.0');

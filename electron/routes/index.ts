@@ -6,6 +6,7 @@ import type { routes as MusicRoutes } from './music';
 import { routes as mpris } from './mpris';
 import { callBackend } from '../lib/backend';
 import { updateRoutes } from '../lib/updates';
+import { nearbyRoutes } from '../lib/nearby';
 
 import { Client, type SetActivity, type SetActivityResponse } from '@xhayper/discord-rpc';
 
@@ -389,6 +390,7 @@ async function appleMusicArtwork(title: string, artists: string[], album?: strin
 
 export const routes = {
     ...updateRoutes,
+    ...nearbyRoutes,
     async openScrobblingLink(url: string): Promise<void> {
         const target = new URL(url);
         if (target.protocol !== 'https:' || !['www.last.fm', 'last.fm', 'listenbrainz.org'].includes(target.hostname)) throw new Error('Invalid account connection link.');

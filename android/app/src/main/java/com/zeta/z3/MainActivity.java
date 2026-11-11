@@ -9,6 +9,7 @@ public class MainActivity extends BridgeActivity {
         registerPlugin(ZetaFilesPlugin.class);
         registerPlugin(ZetaMediaDownloadPlugin.class);
         registerPlugin(ZetaBackupsPlugin.class);
+        registerPlugin(ZetaNearbyPlugin.class);
         registerPlugin(ZetaUpdatesPlugin.class);
         registerPlugin(ZetaPlayerPlugin.class);
         registerPlugin(ZetaVerificationPlugin.class);
