@@ -1,6 +1,10 @@
 <script lang="ts">
     import { onMount } from "svelte";
     import { client } from "$lib/ephaptic";
+    import { updates } from "$lib/state/updates.svelte";
+    import AudioEffects from "$lib/components/AudioEffects.svelte";
+    import PeerSettings from "$lib/components/PeerSettings.svelte";
+    import LibraryMaintenance from "$lib/components/LibraryMaintenance.svelte";
     import Icon from "$lib/components/Icon.svelte";
     import { settingsState } from "$lib/state/settings.svelte";
     import { playerState, setAutoplay } from "$lib/state/player.svelte";
@@ -35,6 +39,8 @@
         if (!isAndroid) void refreshBrowserProfiles();
     });
 
+    let includeBackupAudio = $state(true);
+    let showDuplicates = $state(false);
     let importing = $state(false);
     async function importMusic() {
         importing = true;
@@ -73,6 +79,34 @@
     <header class="head">
         <h1 class="page-title">Settings</h1>
     </header>
+
+    <section class="group">
+        <h2><Icon name="download" /> Updates</h2>
+        <div class="card block">
+            <p class="muted" role="status">
+                {#if updates.checking}Checking GitHub for updates…
+                {:else if updates.status.message}{updates.status.message}
+                {:else if updates.status.phase === 'downloading'}
+                    Downloading Zeta {updates.status.version}{updates.status.progress == null ? '…' : ` · ${updates.status.progress}%`}
+                {:else if updates.status.phase === 'ready'}Zeta {updates.status.version} is ready to install.
+                {:else if updates.status.version}Zeta {updates.status.version} is available.
+                {:else if updates.status.phase === 'current'}Zeta {updates.status.current} is up to date.
+                {:else}Check GitHub for a newer version of Zeta.
+                {/if}
+            </p>
+            <div class="btn-row">
+                <button class="btn" disabled={updates.checking || updates.applying || updates.status.phase === 'downloading'}
+                    onclick={() => updates.check()}>Check for updates</button>
+                {#if ['available', 'ready', 'manual'].includes(updates.status.phase)}
+                    <button class="btn btn-primary" onclick={() => updates.apply()} disabled={updates.checking || updates.applying}>
+                        {updates.status.phase === 'ready' ? 'Restart and install'
+                            : updates.status.phase === 'manual' ? 'Open GitHub release'
+                            : isAndroid ? 'Install update' : 'Download update'}
+                    </button>
+                {/if}
+            </div>
+        </div>
+    </section>
 
     {#if isAndroid}
     <section class="group">
@@ -367,6 +401,39 @@
         </div>
     </section>
 
+    {/if}
+
+    <section class="group"><AudioEffects /></section>
+    <section class="group"><LibraryMaintenance bind:showDuplicates /></section>
+    <section class="group"><PeerSettings includeAudio={includeBackupAudio} /></section>
+
+    <section class="group">
+        <h2><Icon name="folder" /> Zeta backup</h2>
+        <div class="card block">
+            <p class="muted">Transfer your library, playlists, favourites, and listening history between desktop and Android. Import adds to your library.</p>
+            <label class="muted">
+                <input type="checkbox" bind:checked={includeBackupAudio} disabled={settingsState.busyZetaBackup} />
+                Include downloaded audio (128 MiB backup limit)
+            </label>
+            <div class="btn-row">
+                <button class="btn" disabled={settingsState.busyZetaBackup || settingsState.busyMuzza !== false}
+                    onclick={() => settingsState.transferZetaBackup('export', includeBackupAudio)}>
+                    <Icon name="upload" /> Save Zeta backup
+                </button>
+                <button class="btn" disabled={settingsState.busyZetaBackup || settingsState.busyMuzza !== false}
+                    onclick={() => settingsState.transferZetaBackup('import')}>
+                    <Icon name="download" /> Import Zeta backup
+                </button>
+                {#if settingsState.backupDuplicateCount}
+                    <button class="btn" onclick={() => {
+                        showDuplicates = true;
+                        document.getElementById('duplicate-review')?.scrollIntoView();
+                    }}>Review possible duplicates ({settingsState.backupDuplicateCount})</button>
+                {/if}
+            </div>
+        </div>
+    </section>
+
     <section class="group">
         <h2><Icon name="arrow-right-left" /> Muzza</h2>
         <div class="card block">
@@ -376,18 +443,17 @@
                 on demand and download the first time you play them.
             </p>
             <div class="btn-row">
-                <button class="btn" onclick={() => settingsState.exportToMuzza()} disabled={settingsState.busyMuzza !== false}>
+                <button class="btn" onclick={() => settingsState.exportToMuzza()} disabled={settingsState.busyMuzza !== false || settingsState.busyZetaBackup}>
                     {#if settingsState.busyMuzza === "export"}<span class="spin"><Icon name="loader-circle" /></span>{:else}<Icon name="upload" />{/if}
                     Export to Muzza
                 </button>
-                <button class="btn" onclick={() => settingsState.importFromMuzza()} disabled={settingsState.busyMuzza !== false}>
+                <button class="btn" onclick={() => settingsState.importFromMuzza()} disabled={settingsState.busyMuzza !== false || settingsState.busyZetaBackup}>
                     {#if settingsState.busyMuzza === "import"}<span class="spin"><Icon name="loader-circle" /></span>{:else}<Icon name="download" />{/if}
                     Import from Muzza
                 </button>
             </div>
         </div>
     </section>
-    {/if}
 </div>
 
 <style>

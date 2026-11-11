@@ -54,6 +54,24 @@
     const top = $derived((statsState.summary?.topSongs ?? []).slice(0, 14).map(toSong));
     const radios = $derived(top.slice(0, 8));
 
+    const favourites = $derived(libraryState.getPlaylist(FAVOURITES_ID)?.tracks ?? []);
+    let lastFavouritePlays = $state<Record<string, number> | null>(null);
+    $effect(() => {
+        const ids = favourites.map(({ id }) => id);
+        let stale = false;
+        lastFavouritePlays = null;
+        void client.statsLastPlayed(ids).then((plays) => {
+            if (!stale) lastFavouritePlays = plays;
+        }).catch(() => {});
+        return () => { stale = true; };
+    });
+    const forgotten = $derived.by(() => {
+        if (!lastFavouritePlays) return [];
+        const cutoff = Date.now() - 90 * 24 * 60 * 60 * 1000;
+        return favourites.filter(({ id }) => lastFavouritePlays![id] > 0 && lastFavouritePlays![id] < cutoff)
+            .toSorted((a, b) => lastFavouritePlays![a.id] - lastFavouritePlays![b.id]).slice(0, 12);
+    });
+
     let recommendations = $state<Song[]>([]);
     let similarArtists = $state<Artist[]>([]);
     let discoveryArtists = $state<Artist[]>([]);
@@ -463,6 +481,18 @@
         </section>
     {/if}
 
+    {#if forgotten.length}
+        <section>
+            <h2 class="section-title">Forgotten favourites</h2>
+            <p class="muted">Favourites you haven't played in at least 90 days.</p>
+            <div class="forgotten-tracks">
+                {#each forgotten as song (song.id)}
+                    <button class="btn" onclick={() => playTrack(song)}>{song.title}</button>
+                {/each}
+            </div>
+        </section>
+    {/if}
+
     {#if top.length}
         <section class="section">
             <div class="section-head">
@@ -490,6 +520,7 @@
 </div>
 
 <style>
+    .forgotten-tracks { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
     .hero {
         position: relative;
         display: grid;

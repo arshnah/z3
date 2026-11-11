@@ -222,8 +222,19 @@ export class MetadataStore {
     async upsertMany(records: IndexRecord[]): Promise<void> {
         if (!records.length) return;
         const index = await this.load();
+        const previous = new Map(records.map(({ id }) => [id, index.records[id]]));
         for (const record of records) index.records[record.id] = record;
-        await this.persist();
+        try {
+            await this.persist();
+        } catch (error) {
+            for (const record of records) {
+                if (index.records[record.id] !== record) continue;
+                const prior = previous.get(record.id);
+                if (prior) index.records[record.id] = prior;
+                else delete index.records[record.id];
+            }
+            throw error;
+        }
     }
 
     async remove(id: string): Promise<void> {

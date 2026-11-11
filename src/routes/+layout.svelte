@@ -6,6 +6,7 @@
 	import { ui } from '$lib/state/ui.svelte';
 	import { artworkState } from '$lib/state/artwork.svelte';
 	import { androidPreferences } from '$lib/state/android.svelte';
+	import { updates } from '$lib/state/updates.svelte';
 
 	let { children } = $props();
 
@@ -13,6 +14,8 @@
 		document.documentElement.classList.toggle('lite', ui.lite);
 		artworkState.restyle();
 	});
+
+	onMount(() => updates.start());
 
 	onMount(() => {
 		if (!isAndroid) return;

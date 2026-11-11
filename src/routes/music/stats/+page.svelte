@@ -6,11 +6,44 @@
     import { playTrack } from "$lib/state/player.svelte";
     import { openArtist } from "$lib/actions";
     import { formatDate, formatLongDuration } from "$lib/utils";
+    import { client } from '$lib/ephaptic';
+    import { toasts } from '$lib/state/toast.svelte';
+    import { shareListeningPoster } from '$lib/listening-poster';
     import type { Song } from "$lib/schema";
 
     $effect(() => {
         statsState.load();
     });
+
+    let query = $state('');
+    let since = $state('');
+    const today = new Date();
+    let month = $state(`${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}`);
+    let history = $state<Awaited<ReturnType<typeof client.statsSummary>>['history'] | null>(null);
+    let searching = $state(false);
+    let posterBusy = $state(false);
+
+    async function searchHistory(event: SubmitEvent) {
+        event.preventDefault();
+        searching = true;
+        try {
+            const from = since ? new Date(`${since}T00:00:00`).getTime() : undefined;
+            history = (await client.statsSummary(120, { query, from })).history;
+        } catch (error) { toasts.error(error); }
+        finally { searching = false; }
+    }
+
+    async function makePoster() {
+        if (!/^\d{4}-\d{2}$/.test(month)) return;
+        posterBusy = true;
+        try {
+            const [year, number] = month.split('-').map(Number);
+            const summary = await client.statsSummary(9, { from: new Date(year, number - 1, 1).getTime(), until: new Date(year, number, 1).getTime() });
+            if (!summary.totals.totalPlays) throw new Error('There is no listening history for this month.');
+            await shareListeningPoster(month, summary);
+        } catch (error) { toasts.error(error); }
+        finally { posterBusy = false; }
+    }
 
     let s = $derived(statsState.summary);
     const maxSong = $derived(Math.max(1, ...(s?.topSongs.map((x) => x.playTimeMs) ?? [1])));
@@ -34,6 +67,11 @@
         <h1 class="page-title">Your listening</h1>
         <p class="muted">Everything you've played in Zeta (and imported from Muzza).</p>
     </header>
+
+    <div class="history-tools">
+        <input class="input" type="month" aria-label="Poster month" bind:value={month} />
+        <button class="btn" onclick={makePoster} disabled={posterBusy || !month}>Share monthly listening poster</button>
+    </div>
 
     {#if statsState.loading && !s}
         <div class="totals">{#each Array(3) as _}<div class="skeleton" style="height:112px"></div>{/each}</div>
@@ -115,9 +153,16 @@
                 </section>
 
                 <section class="card panel wide">
-                    <h2 class="section-title">Recently played</h2>
+                    <h2 class="section-title">Listening history</h2>
+                    <form class="history-tools" onsubmit={searchHistory}>
+                        <input class="input" type="search" aria-label="Song or artist" placeholder="Song or artist" bind:value={query} />
+                        <input class="input" type="date" aria-label="Played on or after" bind:value={since} />
+                        <button class="btn" disabled={searching}>Search history</button>
+                        {#if history}<button type="button" class="btn" onclick={() => { history = null; query = ''; since = ''; }}>Clear search</button>{/if}
+                    </form>
+                    {#if history && !history.length}<p class="muted">No matching listens.</p>{/if}
                     <div class="history">
-                        {#each s.history as ev, i (ev.timestamp + ev.id + i)}
+                        {#each history ?? s.history as ev, i (ev.timestamp + ev.id + i)}
                             <!-- svelte-ignore a11y_click_events_have_key_events -->
                             <div
                                 class="rank-row clickable"
@@ -146,6 +191,7 @@
 </div>
 
 <style>
+    .history-tools { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0 16px; }
     .head {
         padding: 20px 0 22px;
     }

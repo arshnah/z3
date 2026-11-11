@@ -219,6 +219,16 @@ export function getUpcomingTrack(): Song | null {
     return autoplayCandidate();
 }
 
+export function getUpcomingTracks(limit = 2): Song[] {
+    const first = getUpcomingTrack();
+    const candidates = [
+        ...(first ? [first] : []), ...playerState.upNext, ...getUpcomingContext(limit),
+        ...(playerState.autoplay ? playerState.autoplayTracks : []),
+    ];
+    const seen = new Set([playerState.currentTrack?.id]);
+    return candidates.filter(({ id }) => !seen.has(id) && seen.add(id)).slice(0, limit);
+}
+
 /** The suggestion that would play once everything else runs out, if any. */
 function autoplayCandidate(): Song | null {
     return playerState.autoplay ? playerState.autoplayTracks[0] ?? null : null;
@@ -680,7 +690,7 @@ const CACHE_LIMIT = 6;
 const inflight = new Map<string, Promise<void>>();
 
 function trimCache() {
-    const keep = new Set([playerState.currentTrack?.id, getUpcomingTrack()?.id]);
+    const keep = new Set([playerState.currentTrack?.id, ...getUpcomingTracks().map(({ id }) => id)]);
     for (const key of cache.keys()) {
         if (cache.size <= CACHE_LIMIT) break;
         if (!keep.has(key)) cache.delete(key);

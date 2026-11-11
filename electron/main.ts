@@ -1,9 +1,7 @@
-import { app, BrowserWindow, protocol, net } from 'electron';
+import { app, BrowserWindow, protocol, net, session } from 'electron';
 import { existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import updater from 'electron-updater';
-const { autoUpdater } = updater;
 
 import { exposeIPC } from '@ephaptic/server/electron';
 
@@ -123,10 +121,23 @@ app.whenReady().then(() => {
 		return net.fetch(pathToFileURL(filePath).toString());
 	});
 
-	const mainWindow = createWindow();
+	// Chromium omits HTTP Referer for the packaged zeta-app: origin.
+	// YouTube requires an app identity on embed requests (error 153).
+	session.defaultSession.webRequest.onBeforeSendHeaders(
+		{ urls: ['https://www.youtube-nocookie.com/embed/*', 'https://www.youtube.com/embed/*'] },
+		(details, callback) => {
+			const headers = details.requestHeaders;
+			if (details.resourceType === 'subFrame') {
+				for (const name of Object.keys(headers)) {
+					if (name.toLowerCase() === 'referer') delete headers[name];
+				}
+				headers.Referer = 'https://com.zeta.z3/';
+			}
+			callback({ requestHeaders: headers });
+		},
+	);
 
-	autoUpdater.on('error', console.error);
-	autoUpdater.checkForUpdatesAndNotify().catch(console.error);
+	const mainWindow = createWindow();
 
 	exposeIPC(routes);
 

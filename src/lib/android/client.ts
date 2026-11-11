@@ -9,6 +9,9 @@ import { androidScrobbling } from './scrobbling';
 import { getStreamingQuality, type AudioQuality } from '../audio-quality';
 
 type LocatedSong = StoredSong & { directory: Directory };
+const rangedDownload = registerPlugin<{
+    download(options: { url: string; path: string; size: number }): Promise<void>;
+}>('ZetaMediaDownload');
 const downloads = new Map<string, Promise<LocatedSong>>();
 const temporary = new Map<string, LocatedSong>();
 const files = registerPlugin<{ importAudio(): Promise<{ songs: StoredSong[] }> }>('ZetaFiles');
@@ -67,8 +70,9 @@ const onlineBridgeListeners = Promise.all([
     }),
     onlineBridge.addListener('onlineResolve', async ({ requestId, mediaId }) => {
         try {
-            const audio = await providers.resolveAudio(mediaId, getStreamingQuality());
-            await onlineBridge.completeOnlineRequest({ requestId, result: JSON.stringify(audio) });
+            const stored = await download(mediaId, undefined, false, getStreamingQuality());
+            const { uri } = await Filesystem.getUri({ directory: stored.directory, path: stored.file! });
+            await onlineBridge.completeOnlineRequest({ requestId, result: JSON.stringify({ url: uri }) });
         } catch (error) {
             await reportOnlineRequestError(requestId, error);
         }
@@ -125,32 +129,43 @@ async function download(id: string, track?: Song, save = true, quality: AudioQua
         }
         const song = track ?? stored?.song ?? songCache.get(id);
         if (!song) throw new Error('Search for this song again before downloading it.');
-        const audio = await providers.resolveAudio(id, quality);
-        const extension = audio.mimetype.includes('webm') ? 'webm' : 'm4a';
         const directory = save ? Directory.Data : Directory.Cache;
         if (!save) await Filesystem.mkdir({ directory, path: `${MUSIC_PATH}/audio`, recursive: true }).catch((error) => {
             if (error.code !== 'OS-PLUG-FILE-0010') throw error;
         });
-        const path = `${MUSIC_PATH}/audio/${encodeURIComponent(id)}.${extension}`;
-        const temp = `${path}.part`;
-        const destination = await Filesystem.getUri({ directory, path: temp });
-        try {
-            await FileTransfer.downloadFile({
-                url: audio.url, path: destination.uri,
-                headers: { 'User-Agent': navigator.userAgent, Referer: 'https://www.youtube.com/' },
-                connectTimeout: 20_000, readTimeout: 120_000,
-            });
-            const stat = await Filesystem.stat({ directory, path: temp });
-            if (!stat.size) throw new Error('The provider returned an empty audio file.');
-            await Filesystem.rename({ directory, from: temp, to: path });
+        let lastError: unknown;
+        for await (const audio of providers.resolveAudioCandidates(id, quality)) {
+            const extension = audio.mimetype.includes('webm') ? 'webm' : audio.mimetype.startsWith('video/') ? 'mp4' : 'm4a';
+            const path = `${MUSIC_PATH}/audio/${encodeURIComponent(id)}.${extension}`;
+            const temp = `${path}.${crypto.randomUUID()}.part`;
+            try {
+                const destination = await Filesystem.getUri({ directory, path: temp });
+                if (id.startsWith('yt:') && audio.contentLength) {
+                    await rangedDownload.download({ url: audio.url, path: destination.uri, size: audio.contentLength });
+                } else {
+                    await FileTransfer.downloadFile({
+                        url: audio.url, path: destination.uri,
+                        headers: { 'User-Agent': navigator.userAgent, Referer: id.startsWith('yt:') ? 'https://www.youtube.com/' : 'https://www.jiosaavn.com/' },
+                        connectTimeout: 10_000, readTimeout: 40_000,
+                    });
+                }
+                if (!(await Filesystem.stat({ directory, path: temp })).size) throw new Error('The provider returned an empty audio file.');
+                await Filesystem.rename({ directory, from: temp, to: path });
+            } catch (error) {
+                lastError = error;
+                await Filesystem.deleteFile({ directory, path: temp }).catch(() => {});
+                continue;
+            }
             const result = { song: { ...song, isDownloaded: save }, file: path, mimetype: audio.mimetype, directory };
             if (save) await storage.edit((state) => rememberSong(state, result));
             else temporary.set(id, result);
             return result;
-        } catch (error) {
-            await Filesystem.deleteFile({ directory, path: temp }).catch(() => {});
-            throw error;
         }
+        if (/403|forbidden/i.test(String((lastError as Error | undefined)?.message ?? lastError))) {
+            throw new Error(`${id.startsWith('yt:') ? 'YouTube' : 'JioSaavn'} refused the available audio streams (HTTP 403). Try another recording or an offline copy.`);
+        }
+        if (lastError) throw lastError;
+        throw new Error('The provider returned no playable audio for this track.');
     })();
     downloads.set(requestKey, pending);
     try { return await pending; } finally { downloads.delete(requestKey); }
@@ -170,6 +185,9 @@ export async function importAudio(): Promise<void> {
 
 export const androidClient: Routes = {
     ...androidScrobbling,
+    updateStatus: async () => (await import('./updates')).updateRoutes.updateStatus(),
+    checkForZetaUpdate: async () => (await import('./updates')).updateRoutes.checkForZetaUpdate(),
+    applyZetaUpdate: async () => (await import('./updates')).updateRoutes.applyZetaUpdate(),
     async openScrobblingLink(url) {
         const target = new URL(url);
         if (target.protocol !== 'https:' || !['www.last.fm', 'last.fm', 'listenbrainz.org'].includes(target.hostname)) throw new Error('Invalid account connection link.');
@@ -294,7 +312,52 @@ export const androidClient: Routes = {
     setMusicDir: unsupported, pickMusicDirectory: unsupported,
     pickYoutubeCookies: unsupported, clearYoutubeCookies: unsupported,
     listYoutubeBrowserProfiles: unsupported, setYoutubeBrowserProfile: unsupported,
-    muzzaExport: unsupported, muzzaImport: unsupported, muzzaExportTo: unsupported, muzzaImportFrom: unsupported,
+    zetaPickBackup: async () => (await import('./backups')).backupRoutes.zetaPickBackup(),
+    zetaBackupBytes: async (audio) => (await import('./backups')).backupRoutes.zetaBackupBytes(audio),
+    zetaImportBytes: async (bytes) => (await import('./backups')).backupRoutes.zetaImportBytes(bytes),
+    async musicStorage() {
+        const data = await storage.snapshot();
+        const audio = (await Promise.all(Object.values(data.songs).map(async ({ song, file }) => {
+            if (!file) return null;
+            const info = await Filesystem.stat({ directory: Directory.Data, path: file }).catch(() => null);
+            return info ? { id: song.id, title: song.title, bytes: info.size, removable: /^(yt|js):/.test(song.id) } : null;
+        }))).filter((entry) => entry !== null);
+        const cached = await Filesystem.readdir({ directory: Directory.Cache, path: `${MUSIC_PATH}/audio` }).catch(() => null);
+        return { audio, cacheBytes: cached?.files.reduce((sum, file) => sum + (file.size ?? 0), 0) ?? 0 };
+    },
+    async musicRemoveDownload(id) {
+        if (!/^(yt|js):/.test(id)) throw new Error('Only provider downloads can be removed here.');
+        const current = (await storage.snapshot()).songs[id];
+        if (!current?.file) return;
+        const file = current.file;
+        await storage.edit((data) => rememberSong(data, { song: { ...current.song, isDownloaded: false } }));
+        try {
+            await Filesystem.deleteFile({ directory: Directory.Data, path: file });
+        } catch (error) {
+            if ((error as { code?: string }).code === 'OS-PLUG-FILE-0008') return;
+            await storage.edit((data) => rememberSong(data, current));
+            throw error;
+        }
+    },
+    async musicClearCache() {
+        const cached = await Filesystem.readdir({ directory: Directory.Cache, path: `${MUSIC_PATH}/audio` }).catch(() => null);
+        if (!cached) return;
+        const playing = (await import('../state/player.svelte')).playerState.currentTrack?.id;
+        const { cache } = await import('../state/player.svelte');
+        const protectedFile = playing ? temporary.get(playing)?.file : undefined;
+        for (const file of cached.files) {
+            if (file.type !== 'file' || file.name.endsWith('.part')) continue;
+            const path = `${MUSIC_PATH}/audio/${file.name}`;
+            if (path === protectedFile) continue;
+            await Filesystem.deleteFile({ directory: Directory.Cache, path });
+            for (const [id, item] of temporary) if (item.file === path) { temporary.delete(id); cache.delete(id); }
+        }
+    },
+    zetaExport: async (audio) => (await import('./backups')).backupRoutes.zetaExport(audio),
+    zetaImport: async () => (await import('./backups')).backupRoutes.zetaImport(),
+    muzzaExport: async () => (await import('./backups')).backupRoutes.muzzaExport(),
+    muzzaImport: async () => (await import('./backups')).backupRoutes.muzzaImport(),
+    muzzaExportTo: unsupported, muzzaImportFrom: unsupported,
     m3uImport: unsupported, m3uImportFrom: unsupported, spotifyPlaylistImport: unsupported,
     spotifyPlaylistImportFrom: unsupported, youtubePlaylistImport: unsupported,
     async statsRecordEvent(songId, playTimeMs, timestamp = Date.now(), name) {
@@ -304,9 +367,17 @@ export const androidClient: Routes = {
             if (name) state.names[songId] = name;
         });
     },
-    async statsSummary(limit = 30) {
+    async statsLastPlayed(ids) {
+        const wanted = new Set(ids);
+        const last = new Map<string, number>();
+        for (const { songId, timestamp } of (await storage.snapshot()).events) {
+            if (wanted.has(songId)) last.set(songId, Math.max(last.get(songId) ?? 0, timestamp));
+        }
+        return Object.fromEntries(last);
+    },
+    async statsSummary(limit = 30, filter) {
         const { summarize } = await import('./stats');
-        return summarize(await storage.snapshot(), limit);
+        return summarize(await storage.snapshot(), limit, filter);
     },
     mprisUpdate: noop, clearRPC: noop, async setRPC() { return null; }, async rpcArtwork() { return ''; },
     windowMinimize: noop, async windowMaximizeToggle() { return false; }, async windowIsMaximized() { return false; },

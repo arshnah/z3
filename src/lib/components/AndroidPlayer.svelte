@@ -1,16 +1,20 @@
 <script lang="ts">
     import { registerPlugin, type PluginListenerHandle } from '@capacitor/core';
     import { onMount, untrack } from 'svelte';
+    import { nextTrack, previousTrack } from '$lib/state/player.svelte';
+    import { audioEffects } from '$lib/state/audio-effects.svelte';
     import type { Song } from '$lib/schema';
 
-    interface NativeState { id: string; position: number; duration: number; paused: boolean; ready: boolean; ended: boolean }
+    interface NativeState { id: string; position: number; duration: number; paused: boolean; ready: boolean; ended: boolean; revision: string }
     const native = registerPlugin<{
-        setSource(options: { uri: string; id: string; title: string; artist: string; artwork?: string; position: number; paused: boolean }): Promise<void>;
-        setPaused(options: { paused: boolean }): Promise<void>;
+        setSource(options: { uri: string; id: string; title: string; artist: string; artwork?: string; position: number; paused: boolean; revision: string }): Promise<void>;
+        setPaused(options: { paused: boolean; revision: string }): Promise<void>;
         seek(options: { position: number }): Promise<void>;
+        setAudioEffects(options: { bands: number[]; leveling: boolean }): Promise<void>;
         setVolume(options: { volume: number }): Promise<void>;
         clear(): Promise<void>;
         setKeepAwake(options: { enabled: boolean }): Promise<void>;
+        addListener(name: 'widgetCommand', callback: (event: { command: string }) => void): Promise<PluginListenerHandle>;
         addListener(name: 'state', callback: (state: NativeState) => void): Promise<PluginListenerHandle>;
         addListener(name: 'playbackError', callback: (error: { message: string; id?: string }) => void): Promise<PluginListenerHandle>;
     }>('ZetaPlayer');
@@ -27,20 +31,33 @@
 
     let ready = $state(false);
     let loadedUri: string | undefined;
+    let loadedId: string | undefined;
     let nativePosition = 0;
     let endedFor: string | undefined;
+    let revision: string;
+    let sourceRevision: string;
     let pendingSource = false;
+    let requestedPaused = true;
 
     onMount(() => {
         let disposed = false;
         const handles: PluginListenerHandle[] = [];
         void Promise.all([
+            native.addListener('widgetCommand', ({ command }) => {
+                if (command === 'next') nextTrack();
+                else if (command === 'previous') previousTrack();
+            }),
             native.addListener('state', (state) => {
-                if (state.id !== track?.id || !uri || pendingSource) return;
+                if (state.id !== track?.id || !uri || uri !== loadedUri || state.revision !== revision) return;
+                pendingSource = false;
                 nativePosition = state.position;
                 currentTime = state.position;
                 duration = state.duration;
-                paused = state.paused;
+                // A new UI intent can exist before the effect has sent it to Android.
+                if (paused === requestedPaused) {
+                    requestedPaused = state.paused;
+                    paused = state.paused;
+                }
                 ontimeupdate();
                 if (state.ready && restoreAt !== null) restoreAt = null;
                 if (state.ended && endedFor !== state.id) { endedFor = state.id; onended(); }
@@ -66,21 +83,33 @@
         if (!ready) return;
         const nextUri = uri;
         const song = track;
-        if (loadedUri === nextUri) return;
+        if (loadedUri === nextUri && loadedId === song?.id) return;
         loadedUri = nextUri;
-        pendingSource = true;
+        loadedId = song?.id;
         endedFor = undefined;
         nativePosition = 0;
+        const request = crypto.randomUUID();
+        revision = sourceRevision = request;
+        pendingSource = true;
+        requestedPaused = untrack(() => paused);
         const action = nextUri && song ? native.setSource({
             uri: nextUri, id: song.id, title: song.title, artist: song.artists.map((a) => a.name).join(', '),
             artwork: song.thumbnails.find((t) => t.url?.startsWith('https://'))?.url,
-            position: untrack(() => restoreAt ?? 0), paused: untrack(() => paused),
+            position: untrack(() => restoreAt ?? 0), paused: requestedPaused, revision: request,
         }) : native.clear();
-        void action.then(() => { if (loadedUri === nextUri) pendingSource = false; }).catch(onerror);
+        void action.catch((error) => { if (sourceRevision === request) onerror(error); });
     });
 
     $effect(() => {
-        if (ready && uri) void native.setPaused({ paused }).catch(onerror);
+        if (!ready || !uri || paused === requestedPaused) return;
+        requestedPaused = paused;
+        const commandRevision = revision = crypto.randomUUID();
+        void native.setPaused({ paused, revision: commandRevision }).catch((error) => {
+            if (revision === commandRevision) onerror(error);
+        });
+    });
+    $effect(() => {
+        if (ready) void native.setAudioEffects({ bands: [...audioEffects.bands], leveling: audioEffects.leveling }).catch(() => {});
     });
     $effect(() => {
         if (ready) void native.setVolume({ volume: volume * volume }).catch(onerror);

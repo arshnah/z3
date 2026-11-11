@@ -30,6 +30,7 @@ export interface MobileLibrary {
     songs: Record<string, StoredSong>;
     events: PlayEvent[];
     names: Record<string, SongName>;
+    muzzaBase?: string;
 }
 
 export function emptyLibrary(): MobileLibrary {

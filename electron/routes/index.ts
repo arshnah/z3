@@ -1,8 +1,11 @@
 import { BrowserWindow, dialog, screen } from 'electron';
+import { readFile, stat } from 'node:fs/promises';
+import { MAX_BACKUP_BYTES } from '../../src/lib/zeta-backup';
 
 import type { routes as MusicRoutes } from './music';
 import { routes as mpris } from './mpris';
 import { callBackend } from '../lib/backend';
+import { updateRoutes } from '../lib/updates';
 
 import { Client, type SetActivity, type SetActivityResponse } from '@xhayper/discord-rpc';
 
@@ -27,6 +30,11 @@ const MUSIC_ROUTES = [
     'musicArtistSongs',
     'musicCollection',
     'musicStream',
+    'musicStorage',
+    'musicRemoveDownload',
+    'musicClearCache',
+    'zetaBackupBytes',
+    'zetaImportBytes',
     'musicLoadLibrary',
     'musicPlaylistCreate',
     'musicPlaylistRename',
@@ -52,11 +60,12 @@ const MUSIC_ROUTES = [
     'youtubePlaylistImport',
     'statsRecordEvent',
     'statsSummary',
+    'statsLastPlayed',
 ] as const satisfies readonly (keyof Music)[];
 
 // Cookie settings are reached through the native file dialog below.
 // Require every other backend route to be listed here.
-type Unlisted = Exclude<keyof Music, (typeof MUSIC_ROUTES)[number] | 'setYoutubeCookiesFile'>;
+type Unlisted = Exclude<keyof Music, (typeof MUSIC_ROUTES)[number] | 'setYoutubeCookiesFile' | 'zetaExportTo' | 'zetaImportFrom'>;
 const _everyRouteListed: [Unlisted] extends [never] ? true : Unlisted = true;
 void _everyRouteListed;
 
@@ -100,6 +109,38 @@ const dialogs = {
         });
         if (result.canceled || result.filePaths.length === 0) return null;
         return result.filePaths[0];
+    },
+
+    async zetaExport(includeAudio: boolean) {
+        const picked = await dialog.showSaveDialog(parentWindow(), {
+            title: 'Save Zeta backup',
+            defaultPath: `Zeta_${backupTimestamp()}.zetabackup`,
+            filters: [{ name: 'Zeta backup', extensions: ['zetabackup'] }],
+        });
+        if (picked.canceled || !picked.filePath) return null;
+        return callBackend<Awaited<ReturnType<Music['zetaExportTo']>>>('zetaExportTo', [picked.filePath, includeAudio]);
+    },
+
+    async zetaPickBackup(): Promise<Uint8Array | null> {
+        const picked = await dialog.showOpenDialog(parentWindow(), {
+            title: 'Preview Zeta backup',
+            properties: ['openFile'],
+            filters: [{ name: 'Zeta backup', extensions: ['zetabackup'] }],
+        });
+        const path = picked.filePaths[0];
+        if (picked.canceled || !path) return null;
+        if ((await stat(path)).size > MAX_BACKUP_BYTES) throw new Error('The backup exceeds 128 MiB.');
+        return new Uint8Array(await readFile(path));
+    },
+
+    async zetaImport() {
+        const picked = await dialog.showOpenDialog(parentWindow(), {
+            title: 'Import Zeta backup',
+            properties: ['openFile'],
+            filters: [{ name: 'Zeta backup', extensions: ['zetabackup'] }],
+        });
+        if (picked.canceled || !picked.filePaths.length) return null;
+        return callBackend<Awaited<ReturnType<Music['zetaImportFrom']>>>('zetaImportFrom', [picked.filePaths[0]]);
     },
 
     /** Export the library to a Muzza `.backup` file. Returns null if cancelled. */
@@ -347,6 +388,7 @@ async function appleMusicArtwork(title: string, artists: string[], album?: strin
 }
 
 export const routes = {
+    ...updateRoutes,
     async openScrobblingLink(url: string): Promise<void> {
         const target = new URL(url);
         if (target.protocol !== 'https:' || !['www.last.fm', 'last.fm', 'listenbrainz.org'].includes(target.hostname)) throw new Error('Invalid account connection link.');

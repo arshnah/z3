@@ -1,3 +1,4 @@
+import { downloads } from '$lib/state/downloads.svelte';
 import { goto } from "$app/navigation";
 import { client } from "$lib/ephaptic";
 import type { CollectionDetails, CollectionSummary, MusicProvider, Playlist, Song } from "$lib/schema";
@@ -235,7 +236,7 @@ export function trackMenu(track: Song, opts: { playlist?: Playlist | null; extra
             { label: 'Move up', icon: 'arrow-up', disabled: index <= 0, action: () => move(-1) },
             { label: 'Move down', icon: 'arrow-down', disabled: index < 0 || index >= (opts.playlist?.tracks.length ?? 0) - 1, action: () => move(1) },
         ] : []),
-        ...(!track.isDownloaded ? [{ label: "Download", icon: "download", action: () => libraryState.download(track) }] : []),
+        ...(!track.isDownloaded ? [{ label: "Add to download queue", icon: "download", action: () => downloads.add([track]) }] : []),
         ...(isAndroid ? [{
             label: track.isDownloaded ? 'Share audio file…' : 'Share song…', icon: 'share-2',
             action: async () => {

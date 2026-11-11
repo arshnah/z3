@@ -47,6 +47,11 @@ class Analyser {
     private ctx: AudioContext | null = null;
     private analyser: AnalyserNode | null = null;
     private gain: GainNode | null = null;
+    private filters: BiquadFilterNode[] = [];
+    private compressor: DynamicsCompressorNode | null = null;
+    private output: AudioNode | null = null;
+    private levels = [0, 0, 0, 0, 0];
+    private leveling = false;
     private sources = new WeakMap<HTMLMediaElement, MediaElementAudioSourceNode>();
     private current: HTMLMediaElement | null = null;
 
@@ -87,6 +92,20 @@ class Analyser {
                 this.analyser.maxDecibels = -30;
                 this.gain = this.ctx.createGain();
                 this.gain.connect(this.ctx.destination);
+                this.compressor = this.ctx.createDynamicsCompressor();
+                this.compressor.threshold.value = -20;
+                this.compressor.ratio.value = 4;
+                this.compressor.release.value = 0.7;
+                this.compressor.connect(this.gain);
+                this.filters = [60, 230, 910, 3600, 14000].map((frequency, index) => {
+                    const filter = this.ctx!.createBiquadFilter();
+                    filter.type = index === 0 ? 'lowshelf' : index === 4 ? 'highshelf' : 'peaking';
+                    filter.frequency.value = frequency;
+                    filter.Q.value = 0.9;
+                    return filter;
+                });
+                this.filters.slice(0, -1).forEach((filter, index) => filter.connect(this.filters[index + 1]));
+                this.setEffects(this.levels, this.leveling);
             }
             let source = this.sources.get(element);
             if (!source) {
@@ -94,7 +113,7 @@ class Analyser {
                 this.sources.set(element, source);
             }
             source.connect(this.analyser);
-            source.connect(this.gain!);
+            source.connect(this.filters[0] ?? this.gain!);
             element.volume = 1;
             this.current = element;
             this.applyVolume();
@@ -104,6 +123,20 @@ class Analyser {
             this.current = element;
             this.ctx = null;
             this.applyVolume();
+        }
+    }
+
+    setEffects(levels: number[], leveling: boolean) {
+        this.levels = levels;
+        this.leveling = leveling;
+        if (!this.ctx || !this.gain) return;
+        this.filters.forEach((filter, index) => filter.gain.setTargetAtTime(levels[index] ?? 0, this.ctx!.currentTime, 0.02));
+        const last = this.filters.at(-1);
+        const output = leveling ? this.compressor : this.gain;
+        if (last && output && output !== this.output) {
+            last.disconnect();
+            last.connect(output);
+            this.output = output;
         }
     }
 

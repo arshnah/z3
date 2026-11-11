@@ -2,6 +2,10 @@ import { browser } from "$app/environment";
 import { client } from "$lib/ephaptic";
 import { libraryState } from "$lib/state/library.svelte";
 import { toasts } from "$lib/state/toast.svelte";
+import { ui } from "$lib/state/ui.svelte";
+import { downloads } from "$lib/state/downloads.svelte";
+import { backupCounts, openZetaBackup } from "$lib/zeta-backup";
+import { duplicateSongs } from "$lib/library-tools";
 import {
     getDownloadQuality,
     getStreamingQuality,
@@ -151,11 +155,59 @@ class SettingsStore {
         }
     }
 
+    busyZetaBackup = $state(false);
+    backupDuplicateCount = $state(0);
+
+    async transferZetaBackup(mode: 'export' | 'import', includeAudio = true) {
+        if (this.busyZetaBackup || this.busyMuzza) return;
+        this.busyZetaBackup = true;
+        try {
+            if (mode === 'import') {
+                const bytes = await client.zetaPickBackup();
+                if (bytes) await this.previewZetaBackup(bytes);
+                return;
+            }
+            const result = await client.zetaExport(includeAudio);
+            if (result) toasts.success(`Saved ${result.songs} songs and ${result.playlists} playlists.`);
+        } catch (err) {
+            toasts.error(err);
+        } finally {
+            this.busyZetaBackup = false;
+        }
+    }
+
+    async previewZetaBackup(bytes: Uint8Array) {
+        const { manifest } = await openZetaBackup(bytes);
+        const counts = backupCounts(manifest);
+        const offline = new Set((await client.musicStorage()).audio.map(({ id }) => id));
+        const duplicates = manifest.songs.filter(({ song }) => libraryState.tracks.has(song.id) || offline.has(song.id)).length;
+        const included = manifest.songs.filter(({ audio }) => audio).length;
+        const names = manifest.playlists.slice(0, 6).map(({ name }) => name).join(', ');
+        const confirmed = await ui.confirm('Preview Zeta backup', {
+            message: `${counts.songs} songs, ${counts.playlists} playlists, ${counts.liked} favourites and ${manifest.events.length} listening events. ${included} offline audio files are included. ${duplicates} songs already exist and will be merged.${names ? ` Playlists include ${names}.` : ''}`,
+            confirmLabel: 'Import backup',
+        });
+        if (!confirmed) return false;
+        await client.zetaImportBytes(bytes);
+        await libraryState.refresh();
+        const imported = new Set(manifest.songs.map(({ song }) => song.id));
+        this.backupDuplicateCount = duplicateSongs(libraryState.tracks.values())
+            .filter((group) => group.some(({ id }) => imported.has(id))).length;
+        const missing = manifest.songs.filter(({ song, audio }) => !audio && !offline.has(song.id) && /^(yt|js):/.test(song.id))
+            .map(({ song }) => libraryState.tracks.get(song.id) ?? song);
+        toasts.success(`Imported ${counts.songs} songs and ${counts.playlists} playlists.`);
+        if (missing.length && await ui.confirm('Download missing audio?', {
+            message: `${missing.length} songs from this backup can be downloaded from their providers.`,
+            confirmLabel: 'Add to download queue',
+        })) downloads.add(missing);
+        return true;
+    }
+
     busyMuzza = $state<false | "export" | "import">(false);
 
     /** Export the whole library to a Muzza-compatible `.backup` file. */
     async exportToMuzza() {
-        if (this.busyMuzza) return;
+        if (this.busyMuzza || this.busyZetaBackup) return;
         this.busyMuzza = "export";
         try {
             const result = await client.muzzaExport();
@@ -172,7 +224,7 @@ class SettingsStore {
 
     /** Import a Muzza `.backup` file, merging it into the library. */
     async importFromMuzza() {
-        if (this.busyMuzza) return;
+        if (this.busyMuzza || this.busyZetaBackup) return;
         this.busyMuzza = "import";
         try {
             const result = await client.muzzaImport();

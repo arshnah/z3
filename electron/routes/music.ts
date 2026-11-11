@@ -1,8 +1,10 @@
+import { matchesListeningFilter, type ListeningFilter } from '../../src/lib/listening-history';
 import { Innertube, Parser, Platform, type Types } from 'youtubei.js';
 import { Song as Saavn } from '@saavn-labs/sdk';
 
 import { copyFileSync, readFileSync, statSync, writeFileSync } from 'node:fs';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
+import { rename, unlink, writeFile } from 'node:fs/promises';
 import { execFile } from 'node:child_process';
 import { basename, dirname, extname, isAbsolute, relative, resolve, sep } from 'node:path';
 import { promisify } from 'node:util';
@@ -31,6 +33,9 @@ import { downloadWithYtDlp, readYoutubeCookies } from '../lib/yt-dlp';
 import { findBrowserProfiles } from '../lib/browser-profiles';
 import { MetadataStore, embedMp4Tags, readAudioTags, type IndexRecord } from '../lib/metadata';
 import { buildMuzzaBackup, parseMuzzaBackup, readMuzzaEventsFromDb, type MuzzaEvent } from '../lib/muzza';
+import {
+    audioExtension, backupCounts, backupImage, backupPlaylistId, makeZetaBackup, MAX_BACKUP_BYTES, openZetaBackup, type BackupManifest,
+} from '../../src/lib/zeta-backup';
 import { StatsStore } from '../lib/stats';
 import { comparableText, lyricsfileToLrc } from '../lib/lyricsfile';
 import { routes as scrobbling } from '../lib/scrobbling';
@@ -1589,6 +1594,33 @@ export const routes = {
 
     /* ------------------------------ settings ------------------------------ */
 
+    async musicStorage() {
+        await ensureStorage();
+        const audio = (await Promise.all((await metadata.all()).map(async (record) => {
+            if (!record.file) return null;
+            const file = await vfs.stat(record.file).catch(() => null);
+            return file ? { id: record.id, title: record.title, bytes: file.size, removable: /^(yt|js):/.test(record.id) } : null;
+        }))).filter((entry) => entry !== null);
+        return { audio, cacheBytes: 0 };
+    },
+
+    async musicRemoveDownload(id: string) {
+        await ensureStorage();
+        if (!/^(yt|js):/.test(id)) throw new Error('Only provider downloads can be removed here.');
+        const record = await metadata.get(id);
+        if (!record?.file) return;
+        const file = record.file;
+        await metadata.upsert({ ...record, file: undefined });
+        try {
+            if (await vfs.exists(file)) await vfs.unlink(file);
+        } catch (error) {
+            await metadata.upsert(record);
+            throw error;
+        }
+    },
+
+    async musicClearCache() { return; },
+
     async getSettings() {
         const { musicDir, discordRpcEnabled, youtubeCookiesFile, youtubeBrowserProfileId } = getConfig();
         return {
@@ -1623,17 +1655,19 @@ export const routes = {
 
     /** Switch the music directory. Validates connectivity, then reloads. */
     async setMusicDir(musicDir: string): Promise<Library> {
-        const previous = getConfig().musicDir;
-        saveConfig({ musicDir });
-        try {
-            await reloadStorage();
-            return await routes.musicLoadLibrary();
-        } catch (err) {
-            // Roll back on failure so the app isn't left pointing at a dead store.
-            saveConfig({ musicDir: previous });
-            await reloadStorage().catch(() => {});
-            throw new Error(`Could not use "${musicDir}": ${(err as Error)?.message ?? err}`);
-        }
+        return withPlaylistLock('backup-storage', async () => {
+            const previous = getConfig().musicDir;
+            saveConfig({ musicDir });
+            try {
+                await reloadStorage();
+                return await routes.musicLoadLibrary();
+            } catch (err) {
+                // Roll back on failure so the app isn't left pointing at a dead store.
+                saveConfig({ musicDir: previous });
+                await reloadStorage().catch(() => {});
+                throw new Error(`Could not use "${musicDir}": ${(err as Error)?.message ?? err}`);
+            }
+        });
     },
 
     /* ---------------------------- Muzza interop --------------------------- */
@@ -1663,7 +1697,7 @@ export const routes = {
 
             if (playlist.id === 'favourites.m3u8') {
                 for (const track of playlist.tracks) likedIds.add(track.id);
-            } else {
+            } else if (!playlist.isProtected) {
                 playlists.push({
                     name: playlist.name,
                     createdAt: playlist.createdAt,
@@ -1708,14 +1742,15 @@ export const routes = {
     async muzzaImportFrom(filePath: string): Promise<{ songs: number; playlists: number; liked: number }> {
         await ensureStorage();
 
+        if (statSync(filePath).size > MAX_BACKUP_BYTES) throw new Error('The Muzza backup exceeds 128 MiB.');
         const imported = await parseMuzzaBackup(readFileSync(filePath));
 
         // 0. Preserve the raw backup so a future export can carry over ALL of
         //    Muzza's data (settings, play history, search history, etc.). The
         //    base becomes the authoritative history, so reset Zeta's own events.
         await vfs.mkdir('.zeta/muzza');
-        await vfs.writeFile(MUZZA_BASE_DB, imported.db);
-        if (imported.settings) await vfs.writeFile(MUZZA_BASE_SETTINGS, imported.settings);
+        await vfs.writeFile(MUZZA_BASE_DB, Buffer.from(imported.db));
+        if (imported.settings) await vfs.writeFile(MUZZA_BASE_SETTINGS, Buffer.from(imported.settings));
         else if (await vfs.exists(MUZZA_BASE_SETTINGS)) await vfs.unlink(MUZZA_BASE_SETTINGS).catch(() => {});
 
         // 1. Merge song metadata (never clobber an already-downloaded record).
@@ -1766,6 +1801,137 @@ export const routes = {
             liked: imported.likedIds.length,
         });
         return { songs: toAdd.length, playlists: imported.playlists.length, liked: imported.likedIds.length };
+    },
+
+    async zetaBackupBytes(includeAudio: boolean) {
+        return withPlaylistLock('backup-storage', async () => {
+            const library = await routes.musicLoadLibrary();
+            const songs = new Map<string, BackupManifest['songs'][number]>();
+            for (const record of await metadata.all()) {
+                songs.set(record.id, { song: MetadataStore.toSong(record), audio: includeAudio ? record.file : undefined });
+            }
+            for (const list of library.playlists) {
+                for (const track of list.tracks) if (!songs.has(track.id)) songs.set(track.id, { song: track });
+            }
+            const base = await readMuzzaBase();
+            const manifest: BackupManifest = {
+                songs: [...songs.values()],
+                favourites: library.playlists.find(({ id }) => id === 'favourites.m3u8')?.tracks.map(({ id }) => id) ?? [],
+                playlists: library.playlists.filter(({ isProtected }) => !isProtected).map((playlist) => ({
+                    id: playlist.id, name: playlist.name, createdAt: playlist.createdAt,
+                    thumbnail: backupImage(playlist.thumbnail), trackIds: playlist.tracks.map(({ id }) => id),
+                })),
+                events: [
+                    ...await stats.events(),
+                    ...(base ? (await readMuzzaEventsFromDb(base.db)).map(({ zetaId, ...event }) => ({ songId: zetaId, ...event })) : []),
+                ],
+                names: await stats.names(),
+            };
+            const archive = await makeZetaBackup(manifest, async ({ audio }) => {
+                if (!audio || !(await vfs.exists(audio))) return undefined;
+                if ((await vfs.stat(audio)).size > MAX_BACKUP_BYTES) throw new Error('An audio file exceeds the backup size limit.');
+                return vfs.readFile(audio);
+            });
+            return { bytes: archive, ...backupCounts(manifest) };
+        });
+    },
+
+    async zetaExportTo(filePath: string, includeAudio: boolean) {
+        const { bytes, ...counts } = await routes.zetaBackupBytes(includeAudio);
+        const temporary = `${filePath}.${randomUUID()}.tmp`;
+        try {
+            await writeFile(temporary, bytes, { flag: 'wx', mode: 0o600 });
+            await rename(temporary, filePath);
+        } finally {
+            await unlink(temporary).catch(() => {});
+        }
+        return { path: filePath, ...counts };
+    },
+
+    async zetaImportFrom(filePath: string) {
+        if (statSync(filePath).size > MAX_BACKUP_BYTES) throw new Error('The backup exceeds 128 MiB.');
+        return routes.zetaImportBytes(readFileSync(filePath));
+    },
+
+    async zetaImportBytes(bytes: Uint8Array) {
+        const { manifest, readAudio } = await openZetaBackup(bytes);
+        return withPlaylistLock('backup-storage', async () => {
+            await ensureStorage();
+            const addedFiles: string[] = [];
+            const records: IndexRecord[] = [];
+            try {
+                for (const { song, audio } of manifest.songs) {
+                    const existing = await metadata.get(song.id);
+                    if (existing?.file && await vfs.exists(existing.file)) continue;
+                    const { isDownloaded: _downloaded, ...record } = song;
+                    if (audio) {
+                        const bytes = await readAudio(audio);
+                        const extension = audioExtension(audio);
+                        const file = `Restored music/${sanitiseFilename(song.title).slice(0, 60) || 'Track'} [${randomUUID()}].${extension}`;
+                        await vfs.mkdir('Restored music');
+                        addedFiles.push(file);
+                        await vfs.writeFile(file, Buffer.from(bytes));
+                        records.push({ ...record, file });
+                    } else if (!existing) {
+                        records.push(record);
+                    }
+                }
+                await metadata.upsertMany(records);
+            } catch (error) {
+                await Promise.allSettled(addedFiles.map((file) => vfs.unlink(file)));
+                throw error;
+            }
+
+            await ensureFavourites();
+            await withPlaylistLock('favourites.m3u8', async () => {
+                const { meta, entries } = await readParsedPlaylist('favourites.m3u8');
+                const resolved = await resolveEntries(entries);
+                const ids = new Set(resolved.map(({ entry, song }) => entryId(entry, song)));
+                const blocks = entries.map(({ block }) => block);
+                for (const id of manifest.favourites) {
+                    if (ids.has(id)) continue;
+                    const record = await metadata.get(id);
+                    if (!record) continue;
+                    blocks.push(playlistLinesForSong(MetadataStore.toSong(record), record));
+                    ids.add(id);
+                }
+                await writePlaylistEntries('favourites.m3u8', meta, blocks);
+            });
+            const playlistFiles = (await vfs.readdir('')).filter((entry) =>
+                entry.isFile && entry.name.endsWith('.m3u8') && !entry.name.startsWith('.'));
+            const ids = new Map(await Promise.all(playlistFiles.map(async ({ name }) =>
+                [await backupPlaylistId(name), name] as const)));
+            for (const playlist of manifest.playlists) {
+                const stableId = await backupPlaylistId(playlist.id);
+                const id = ids.get(stableId) ?? stableId;
+                await withPlaylistLock(id, async () => {
+                    const existing = await vfs.exists(id) ? await readParsedPlaylist(id) : null;
+                    const resolved = existing ? await resolveEntries(existing.entries) : [];
+                    const trackIds = new Set(resolved.map(({ entry, song }) => entryId(entry, song)));
+                    const blocks = existing?.entries.map(({ block }) => block) ?? [];
+                    const previousLength = blocks.length;
+                    for (const trackId of playlist.trackIds) {
+                        if (trackIds.has(trackId)) continue;
+                        const record = await metadata.get(trackId);
+                        if (record) {
+                            blocks.push(playlistLinesForSong(MetadataStore.toSong(record), record));
+                            if (existing) trackIds.add(trackId);
+                        }
+                    }
+                    if (existing && blocks.length === previousLength) return;
+                    await writePlaylistEntries(id, existing?.meta ?? {
+                        name: oneLine(playlist.name), createdAt: playlist.createdAt,
+                        thumbnail: playlist.thumbnail ?? '', isProtected: false,
+                    }, blocks);
+                });
+            }
+            const base = await readMuzzaBase();
+            const baseEvents = base
+                ? (await readMuzzaEventsFromDb(base.db)).map(({ zetaId, ...event }) => ({ songId: zetaId, ...event }))
+                : [];
+            await stats.mergeEvents(manifest.events, baseEvents, manifest.names ?? {});
+            return backupCounts(manifest);
+        });
     },
 
     /** Import a local M3U playlist, copying referenced files into managed storage when needed. */
@@ -2001,7 +2167,19 @@ export const routes = {
      * Aggregate listening stats, combining Zeta's own play events with the
      * history from an imported Muzza backup (if any).
      */
-    async statsSummary(limit: number = 30): Promise<{
+    async statsLastPlayed(ids: string[]): Promise<Record<string, number>> {
+        await ensureStorage();
+        const wanted = new Set(ids);
+        const last = new Map<string, number>();
+        const base = await readMuzzaBase();
+        const history = base ? await readMuzzaEventsFromDb(base.db).catch(() => []) : [];
+        for (const { songId, timestamp } of [...await stats.events(), ...history.map(({ zetaId, timestamp }) => ({ songId: zetaId, timestamp }))]) {
+            if (wanted.has(songId)) last.set(songId, Math.max(last.get(songId) ?? 0, timestamp));
+        }
+        return Object.fromEntries(last);
+    },
+
+    async statsSummary(limit: number = 30, filter?: ListeningFilter): Promise<{
         topSongs: { id: string; title: string; artists: string[]; thumbnailUrl?: string; playTimeMs: number; plays: number; lastPlayed: number }[];
         topArtists: { name: string; playTimeMs: number; plays: number; thumbnailUrl?: string }[];
         history: { id: string; title: string; artists: string[]; thumbnailUrl?: string; timestamp: number; playTimeMs: number }[];
@@ -2012,7 +2190,7 @@ export const routes = {
         const zetaEvents = await stats.events();
         const base = await readMuzzaBase();
         const baseEvents = base ? await readMuzzaEventsFromDb(base.db).catch(() => []) : [];
-        const events: { songId: string; timestamp: number; playTimeMs: number }[] = [
+        const allEvents: { songId: string; timestamp: number; playTimeMs: number }[] = [
             ...baseEvents.map((e) => ({ songId: e.zetaId, timestamp: e.timestamp, playTimeMs: e.playTimeMs })),
             ...zetaEvents,
         ];
@@ -2034,6 +2212,7 @@ export const routes = {
             return { title: cached?.title ?? id, artists: cached?.artists ?? [], thumbnailUrl: cached?.thumbnailUrl };
         };
 
+        const events = filter ? allEvents.filter((event) => matchesListeningFilter(event, nameFor(event.songId), filter)) : allEvents;
         const perSong = new Map<string, { playTimeMs: number; plays: number; last: number }>();
         for (const e of events) {
             const s = perSong.get(e.songId) ?? { playTimeMs: 0, plays: 0, last: 0 };

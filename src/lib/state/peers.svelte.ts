@@ -1,0 +1,220 @@
+import { client } from '$lib/ephaptic';
+import { createPeer, decodeSignal, acceptPeer, sendPeerBytes, type PeerMode } from '$lib/peer-connection';
+import { addToQueue, nextTrack, previousTrack, playerState, playTrack, setVolume, togglePlay } from './player.svelte';
+import { settingsState } from './settings.svelte';
+import { toasts } from './toast.svelte';
+import { MAX_BACKUP_BYTES } from '$lib/zeta-backup';
+import type { Song } from '$lib/schema';
+
+type Command = 'toggle' | 'next' | 'previous' | 'seek' | 'volume';
+type RemotePlayback = { song: Song | null; paused: boolean; position: number; duration: number; queue: string[] };
+type Link = { id: string; mode: PeerMode; peer: RTCPeerConnection; channel?: RTCDataChannel; host: boolean; connected: boolean; backupAudio?: boolean };
+type IncomingBackup = { id: string; bytes: Uint8Array; offset: number; digest: string };
+
+function wireSong(input: unknown, remote = false): Song | null {
+    const song = input as Song | null;
+    if (!song || typeof song.id !== 'string' || typeof song.title !== 'string' || !Array.isArray(song.artists)) return null;
+    if (remote && !/^yt:[\w-]{11}$|^js:[\w-]{1,64}$/.test(song.id)) return null;
+    if (!/^(yt|js|local|fs):/.test(song.id) || song.id.length > 1024) return null;
+    return {
+        id: song.id, title: song.title.slice(0, 300), thumbnails: [],
+        artists: song.artists.slice(0, 8).flatMap((artist) => typeof artist?.name === 'string'
+            ? [{ name: artist.name.slice(0, 120), thumbnails: [] }] : []),
+        duration: Number.isFinite(song.duration) ? Math.max(0, song.duration) : 0,
+        album: null, isDownloaded: false,
+    };
+}
+
+async function digest(bytes: Uint8Array<ArrayBuffer>) {
+    const hash = new Uint8Array(await crypto.subtle.digest('SHA-256', bytes));
+    return Array.from(hash, (value) => value.toString(16).padStart(2, '0')).join('');
+}
+
+class Peers {
+    links = $state<Link[]>([]);
+    pending = $state<{ id: string; mode: PeerMode; code: string; host: boolean } | null>(null);
+    remote = $state<RemotePlayback | null>(null);
+    busy = $state(false);
+    following = $state(false);
+    partyControls = $state(false);
+    progress = $state<number | null>(null);
+    private incoming: IncomingBackup | null = null;
+    private timer: ReturnType<typeof setInterval> | undefined;
+
+    private startBroadcast() {
+        if (this.timer) return;
+        this.timer = setInterval(() => {
+            const hosts = this.links.filter((link) => link.host && link.connected && link.mode !== 'backup');
+            if (!hosts.length) return;
+            const data = {
+                type: 'playback', song: wireSong(playerState.currentTrack), paused: playerState.paused,
+                position: playerState.currentTime, duration: playerState.duration,
+                queue: playerState.upNext.slice(0, 25).map(({ title }) => title),
+            };
+            for (const link of hosts) this.send(link, data);
+        }, 1200);
+    }
+
+    private send(link: Link, message: object) {
+        if (link.channel?.readyState === 'open') link.channel.send(JSON.stringify(message));
+    }
+
+    private attach(link: Link, channel: RTCDataChannel) {
+        link.channel = channel;
+        channel.binaryType = 'arraybuffer';
+        channel.onopen = () => {
+            link.connected = true;
+            if (this.pending?.id === link.id) this.pending = null;
+            if (link.backupAudio !== undefined) void this.sendBackup(link.id).catch((error) => toasts.error(error));
+        };
+        channel.onclose = () => this.disconnect(link.id);
+        channel.onmessage = ({ data }) => { void this.receive(link, data).catch((error) => {
+            this.incoming = null;
+            this.progress = null;
+            toasts.error(error);
+        }); };
+    }
+
+    private async pair(mode: PeerMode, code?: string, backupAudio?: boolean) {
+        if (this.pending || this.busy) throw new Error('Finish or cancel the current pairing first.');
+        if (this.links.length >= 6) throw new Error('Disconnect a device before adding another.');
+        if (code && this.links.some((link) => !link.host)) throw new Error('Disconnect the previous host first.');
+        this.busy = true;
+        try {
+            const offer = code ? await decodeSignal(code) : undefined;
+            mode = offer?.mode ?? mode;
+            const id = crypto.randomUUID();
+            let channel: RTCDataChannel | undefined;
+            const result = await createPeer(mode, (incoming) => {
+                channel = incoming;
+                const link = this.links.find((item) => item.id === id);
+                if (link) this.attach(link, incoming);
+            }, offer);
+            this.links.push({ id, mode, peer: result.peer, host: !offer, connected: false, backupAudio });
+            const link = this.links.at(-1)!;
+            if (channel) this.attach(link, channel);
+            result.peer.onconnectionstatechange = () => {
+                if (result.peer.connectionState === 'failed') {
+                    this.disconnect(id);
+                    toasts.error('Could not reach the other device. Check that both are on the same Wi-Fi.');
+                }
+            };
+            this.pending = { id, mode, code: result.code, host: !offer };
+            this.startBroadcast();
+        } finally {
+            this.busy = false;
+        }
+    }
+
+    invite(mode: PeerMode, includeAudio = true) { return this.pair(mode, undefined, mode === 'backup' ? includeAudio : undefined); }
+    join(code: string) { return this.pair('backup', code); }
+
+    async finish(code: string) {
+        const link = this.links.find(({ id }) => id === this.pending?.id);
+        if (!link?.host) throw new Error('There is no invitation waiting for a reply.');
+        await acceptPeer(link.peer, link.mode, code);
+    }
+
+    disconnect(id: string) {
+        const link = this.links.find((item) => item.id === id);
+        if (!link) return;
+        this.links = this.links.filter((item) => item.id !== id);
+        if (this.pending?.id === id) this.pending = null;
+        if (!link.host) { this.remote = null; this.following = false; }
+        if (this.incoming?.id === id) { this.incoming = null; this.progress = null; }
+        if (!this.links.length) { clearInterval(this.timer); this.timer = undefined; }
+        if (link.channel) { link.channel.onclose = null; link.channel.close(); }
+        link.peer.close();
+    }
+
+    async sendBackup(id: string) {
+        const link = this.links.find((item) => item.id === id && item.host && item.mode === 'backup');
+        if (!link?.connected || !link.channel || this.progress !== null) return;
+        this.progress = 0;
+        try {
+            const { bytes } = await client.zetaBackupBytes(link.backupAudio ?? true);
+            const data = Uint8Array.from(bytes);
+            this.send(link, { type: 'backup-start', size: data.length, digest: await digest(data) });
+            await sendPeerBytes(link.channel, data, (fraction) => { this.progress = fraction; });
+            this.send(link, { type: 'backup-end' });
+            toasts.success('Backup sent. Confirm the preview on the receiving device.');
+        } finally { this.progress = null; }
+    }
+
+    command(command: Command, value?: number) {
+        const link = this.links.find((item) => !item.host && item.connected && item.mode !== 'backup');
+        if (link) this.send(link, { type: 'command', command, value });
+    }
+
+    queue(song: Song) {
+        const link = this.links.find((item) => !item.host && item.connected && item.mode === 'party');
+        const clean = wireSong(song, true);
+        if (link && clean) this.send(link, { type: 'queue', song: clean });
+    }
+
+    private async receive(link: Link, data: unknown) {
+        if (data instanceof ArrayBuffer) {
+            const backup = this.incoming;
+            if (!backup || backup.id !== link.id || backup.offset + data.byteLength > backup.bytes.length) return;
+            backup.bytes.set(new Uint8Array(data), backup.offset);
+            backup.offset += data.byteLength;
+            this.progress = backup.offset / backup.bytes.length;
+            return;
+        }
+        if (typeof data !== 'string' || data.length > 32_000) return;
+        const message = JSON.parse(data);
+        if (!message || typeof message.type !== 'string') return;
+        if (link.mode === 'backup') {
+            if (link.host) return;
+            if (message.type === 'backup-start' && !this.incoming && Number.isSafeInteger(message.size) &&
+                message.size > 0 && message.size <= MAX_BACKUP_BYTES && /^[a-f0-9]{64}$/.test(message.digest)) {
+                this.incoming = { id: link.id, bytes: new Uint8Array(message.size), offset: 0, digest: message.digest };
+                this.progress = 0;
+            } else if (message.type === 'backup-end' && this.incoming?.id === link.id) {
+                const backup = this.incoming;
+                this.incoming = null;
+                this.progress = null;
+                if (backup.offset !== backup.bytes.length || await digest(Uint8Array.from(backup.bytes)) !== backup.digest) {
+                    throw new Error('The transferred backup is incomplete.');
+                }
+                await settingsState.previewZetaBackup(backup.bytes);
+            }
+            return;
+        }
+        if (link.host) {
+            if (link.mode === 'party' && message.type === 'queue') {
+                const song = wireSong(message.song, true);
+                if (song && playerState.upNext.length < 100) addToQueue(song);
+            }
+            if (message.type === 'command' && (link.mode === 'remote' || this.partyControls)) {
+                if (message.command === 'toggle') togglePlay();
+                if (message.command === 'next') nextTrack();
+                if (message.command === 'previous') previousTrack();
+                if (message.command === 'volume' && Number.isFinite(message.value)) setVolume(message.value);
+                if (message.command === 'seek' && Number.isFinite(message.value)) {
+                    playerState.currentTime = Math.min(playerState.duration, Math.max(0, message.value));
+                }
+            }
+            return;
+        }
+        if (message.type !== 'playback' || !Number.isFinite(message.position) || !Number.isFinite(message.duration)) return;
+        const song = wireSong(message.song);
+        this.remote = {
+            song, paused: !!message.paused, position: Math.max(0, message.position), duration: Math.max(0, message.duration),
+            queue: Array.isArray(message.queue) ? message.queue.filter((title: unknown) => typeof title === 'string').slice(0, 25) : [],
+        };
+        if (link.mode === 'party' && this.following) {
+            if (!song || !/^(yt|js):/.test(song.id)) {
+                playerState.paused = true;
+                return;
+            }
+            if (playerState.currentTrack?.id !== song.id) playTrack(song);
+            else if (!playerState.isLoading && playerState.stream) {
+                if (Math.abs(playerState.currentTime - message.position) > 2) playerState.currentTime = message.position;
+                playerState.paused = !!message.paused;
+            }
+        }
+    }
+}
+
+export const peers = new Peers();

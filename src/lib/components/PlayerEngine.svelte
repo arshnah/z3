@@ -21,6 +21,7 @@
         isNextTrackAvailable,
         isPreviousTrackAvailable,
         getUpcomingTrack,
+        getUpcomingTracks,
         togglePlay,
         seekBy,
         setVolume,
@@ -36,6 +37,7 @@
     import { artworkState } from "$lib/state/artwork.svelte";
     import { ui } from "$lib/state/ui.svelte";
     import { toasts } from "$lib/state/toast.svelte";
+    import { audioEffects } from '$lib/state/audio-effects.svelte';
     import { analyser } from "$lib/audio/analyser";
     import { onMediaCommand, type MediaCommand } from "$lib/mpris";
     import { updateThumbnailUrl, getThumbnailUrl, artistNames } from "$lib/utils";
@@ -91,6 +93,7 @@
 
     $effect(() => {
         analyser.setVolume(playerState.muted ? 0 : playerState.volume);
+        analyser.setEffects([...audioEffects.bands], audioEffects.leveling);
     });
 
     /* -------------------------- session restore --------------------------- */
@@ -98,15 +101,15 @@
     const SESSION_KEY = "zeta:session";
     // Set while restoring: load the last track paused, at its old position.
     let restoreAt = $state<number | null>(null);
-    let restoringId: string | null = null;
+    let restoringTrack: Song | null = null;
 
     (function restoreSession() {
         try {
             const saved = JSON.parse(localStorage.getItem(SESSION_KEY) || "null");
             if (!saved?.track) return;
             restoreAt = saved.time ?? 0;
-            restoringId = saved.track.id;
             playerState.currentTrack = saved.track;
+            restoringTrack = playerState.currentTrack;
             if (saved.playlistId) {
                 // The library loads asynchronously; attach the context once it has.
                 const stop = $effect.root(() => {
@@ -187,11 +190,13 @@
 
     $effect(() => {
         const track = playerState.currentTrack;
-        if (restoreAt !== null && restoringId && track?.id !== restoringId) {
-            restoreAt = null;
-            restoringId = null;
-        }
-        untrack(() => artworkState.update(track));
+        untrack(() => {
+            if (restoreAt !== null && track !== restoringTrack) {
+                restoreAt = null;
+                restoringTrack = null;
+            }
+            artworkState.update(track);
+        });
 
         if (!track) {
             playerState.stream = null;
@@ -201,17 +206,19 @@
         }
 
         const loadingId = track.id;
+        let stale = false;
         untrack(() => {
             resetState();
             const done = () => {
-                if (playerState.currentTrack?.id !== loadingId) return;
+                if (stale || playerState.currentTrack?.id !== loadingId) return;
                 applyCache(cache.get(loadingId));
                 failCount = 0;
                 if (restoreAt !== null) playerState.paused = true;
             };
             if (cache.has(track.id)) done();
-            else loadTrack(track).then(done).catch((err) => handlePlaybackFailure(track, err));
+            else loadTrack(track).then(done).catch((err) => { if (!stale) handlePlaybackFailure(track, err); });
         });
+        return () => { stale = true; };
     });
 
     // When the library gets a better copy of the playing song (metadata repaired,
@@ -240,8 +247,16 @@
 
     // Preload whatever is up next (reactive: follows shuffle/queue changes).
     $effect(() => {
-        const upcoming = getUpcomingTrack();
-        if (upcoming && !playerState.isLoading) loadTrack(upcoming).catch(() => {});
+        const upcoming = getUpcomingTracks();
+        if (playerState.isLoading) return;
+        let stale = false;
+        void (async () => {
+            for (const song of upcoming) {
+                if (stale) break;
+                await loadTrack(song).catch(() => {});
+            }
+        })();
+        return () => { stale = true; };
     });
 
     // Autoplay: fetch similar songs as the queue runs low.

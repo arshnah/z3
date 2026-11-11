@@ -11,6 +11,7 @@ import androidx.media3.common.C;
 import androidx.media3.common.MediaItem;
 import androidx.media3.common.MediaMetadata;
 import androidx.media3.common.util.UnstableApi;
+import androidx.media3.datasource.DefaultDataSource;
 import androidx.media3.datasource.DefaultHttpDataSource;
 import androidx.media3.exoplayer.ExoPlayer;
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory;
@@ -54,6 +55,11 @@ public class PlaybackService extends MediaLibraryService {
     private static final String ONLINE_PREFIX = "online:";
 
     private MediaLibrarySession session;
+    static PlaybackService active;
+    private final ZetaAudioLeveler leveler = new ZetaAudioLeveler();
+    private android.media.audiofx.Equalizer equalizer;
+    private int sessionId;
+    private double[] bands = new double[5];
     private final ExecutorService libraryExecutor = Executors.newSingleThreadExecutor();
     private final Map<String, List<MediaItem>> searchResults = new ConcurrentHashMap<>();
     private final MediaLibrarySession.Callback callback = new MediaLibrarySession.Callback() {
@@ -166,11 +172,19 @@ public class PlaybackService extends MediaLibraryService {
         super.onCreate();
         Map<String, String> requestHeaders = new HashMap<>();
         requestHeaders.put("Referer", "https://www.youtube.com/");
-        ExoPlayer player = new ExoPlayer.Builder(this)
-            .setMediaSourceFactory(new DefaultMediaSourceFactory(this).setDataSourceFactory(
-                new DefaultHttpDataSource.Factory()
-                    .setUserAgent("Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36")
-                    .setDefaultRequestProperties(requestHeaders)))
+        var renderers = new androidx.media3.exoplayer.DefaultRenderersFactory(this) {
+            @Override protected androidx.media3.exoplayer.audio.AudioSink buildAudioSink(
+                    android.content.Context context, boolean enableFloatOutput, boolean enableAudioOutputPlaybackParams) {
+                return new androidx.media3.exoplayer.audio.DefaultAudioSink.Builder(context)
+                    .setAudioProcessors(new androidx.media3.common.audio.AudioProcessor[] { leveler })
+                    .build();
+            }
+        };
+        var httpFactory = new DefaultHttpDataSource.Factory()
+            .setUserAgent("Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36")
+            .setDefaultRequestProperties(requestHeaders);
+        ExoPlayer player = new ExoPlayer.Builder(this, renderers)
+            .setMediaSourceFactory(new DefaultMediaSourceFactory(new DefaultDataSource.Factory(this, httpFactory)))
             .setAudioAttributes(new AudioAttributes.Builder().setUsage(C.USAGE_MEDIA).setContentType(C.AUDIO_CONTENT_TYPE_MUSIC).build(), true)
             .setHandleAudioBecomingNoisy(true)
             .setWakeMode(C.WAKE_MODE_LOCAL)
@@ -178,6 +192,64 @@ public class PlaybackService extends MediaLibraryService {
         PendingIntent activity = PendingIntent.getActivity(this, 0,
             new Intent(this, MainActivity.class), PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
         session = new MediaLibrarySession.Builder(this, player, callback).setSessionActivity(activity).build();
+        active = this;
+        player.addListener(new androidx.media3.common.Player.Listener() {
+            @Override public void onAudioSessionIdChanged(int id) {
+                if (equalizer != null) { equalizer.release(); equalizer = null; }
+                sessionId = id;
+                applyEqualizer();
+            }
+
+            @Override public void onMediaMetadataChanged(MediaMetadata metadata) { updateWidget(); }
+            @Override public void onIsPlayingChanged(boolean playing) { updateWidget(); }
+            @Override public void onMediaItemTransition(MediaItem item, int reason) { updateWidget(); }
+        });
+        sessionId = player.getAudioSessionId();
+        updateWidget();
+    }
+
+    void setAudioEffects(double[] values, boolean leveling) {
+        bands = values;
+        leveler.enabled = leveling;
+        applyEqualizer();
+    }
+
+    private void applyEqualizer() {
+        if (sessionId <= 0) return;
+        boolean enabled = java.util.Arrays.stream(bands).anyMatch(value -> value != 0);
+        try {
+            if (enabled && equalizer == null) equalizer = new android.media.audiofx.Equalizer(0, sessionId);
+            if (equalizer == null) return;
+            int[] centers = { 60, 230, 910, 3600, 14000 };
+            short[] range = equalizer.getBandLevelRange();
+            for (short band = 0; band < equalizer.getNumberOfBands(); band++) {
+                double center = equalizer.getCenterFreq(band) / 1000.0;
+                int nearest = 0;
+                for (int index = 1; index < centers.length; index++) {
+                    if (Math.abs(Math.log(center / centers[index])) < Math.abs(Math.log(center / centers[nearest]))) nearest = index;
+                }
+                equalizer.setBandLevel(band, (short) Math.max(range[0], Math.min(range[1], bands[nearest] * 100)));
+            }
+            equalizer.setEnabled(enabled);
+        } catch (RuntimeException error) {
+            Log.w(TAG, "Device equalizer is unavailable.", error);
+        }
+    }
+
+    void updateWidget() {
+        ZetaPlaybackWidget.refresh(this, session == null ? null : session.getPlayer());
+    }
+
+    void widgetAction(String action) {
+        if (session == null) return;
+        var player = session.getPlayer();
+        if (player.getCurrentMediaItem() == null) return;
+        if ("toggle".equals(action)) {
+            if (player.getPlayWhenReady()) player.pause(); else player.play();
+        } else if ("previous".equals(action) || "next".equals(action)) {
+            if (player.getMediaItemCount() <= 1 && ZetaPlayerPlugin.widgetNavigation(action)) return;
+            if ("previous".equals(action)) player.seekToPrevious(); else player.seekToNext();
+        }
     }
 
     @Override
@@ -200,8 +272,18 @@ public class PlaybackService extends MediaLibraryService {
             response -> {
                 JSONObject audio = parseObject(response);
                 Uri uri = Uri.parse(audio.optString("url", ""));
-                if (!"https".equals(uri.getScheme()) || uri.getHost() == null) {
-                    throw new IllegalArgumentException("The provider returned an invalid streaming URL.");
+                if (!"file".equals(uri.getScheme()) || uri.getPath() == null) {
+                    throw new IllegalArgumentException("The provider returned an invalid audio file.");
+                }
+                try {
+                    File file = new File(uri.getPath()).getCanonicalFile();
+                    File data = new File(getFilesDir(), "zeta/audio").getCanonicalFile();
+                    File cache = new File(getCacheDir(), "zeta/audio").getCanonicalFile();
+                    if ((!data.equals(file.getParentFile()) && !cache.equals(file.getParentFile())) || !file.isFile()) {
+                        throw new IllegalArgumentException("The audio file is unavailable.");
+                    }
+                } catch (java.io.IOException error) {
+                    throw new IllegalArgumentException("Could not open the audio file.", error);
                 }
                 return item.buildUpon().setUri(uri).build();
             },
@@ -480,12 +562,15 @@ public class PlaybackService extends MediaLibraryService {
 
     @Override
     public void onDestroy() {
+        if (active == this) active = null;
+        if (equalizer != null) equalizer.release();
         libraryExecutor.shutdown();
         if (session != null) {
             session.getPlayer().release();
             session.release();
             session = null;
         }
+        ZetaPlaybackWidget.refresh(this, null);
         super.onDestroy();
     }
 }

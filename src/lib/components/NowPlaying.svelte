@@ -144,12 +144,12 @@
     function selectVideo(video: Song) {
         const videoId = video.id.startsWith("yt:") ? video.id.slice(3) : "";
         if (!/^[\w-]{11}$/.test(videoId)) return;
-        if (isAndroid) {
-            selectedVideo = video;
-            void client.openMusicVideo(videoId).catch((error) => toasts.error(error));
-            return;
-        }
         selectedVideo = video;
+        if (isAndroid) openVideo(videoId);
+    }
+
+    function openVideo(videoId: string) {
+        void client.openMusicVideo(videoId).catch((error) => toasts.error(error));
     }
 
     const selectedVideoId = $derived(
@@ -279,7 +279,13 @@
         {:else if mode === "video"}
             <div class="video-stage">
                 <div class="video-content">
-                    {#if selectedVideoId}
+                    {#if selectedVideoId && isAndroid}
+                        <div class="video-state">
+                            <Icon name="film" />
+                            <span>{selectedVideo?.title ?? track.title}</span>
+                            <button class="video-retry" onclick={() => openVideo(selectedVideoId)}>Watch on YouTube</button>
+                        </div>
+                    {:else if selectedVideoId}
                         <iframe
                             class="video-frame"
                             src="https://www.youtube-nocookie.com/embed/{selectedVideoId}?autoplay=1&playsinline=1&rel=0&cc_load_policy=1"
@@ -302,6 +308,9 @@
                         <div class="video-state"><Icon name="film" /><span>No music videos found for this song.</span></div>
                     {/if}
                 </div>
+                {#if selectedVideoId && !isAndroid}
+                    <button class="video-retry" onclick={() => openVideo(selectedVideoId)}>Open on YouTube</button>
+                {/if}
                 {#if videos.length}
                     <div class="video-picks" aria-label="More videos for this song">
                         <span class="video-picks-label">More videos</span>

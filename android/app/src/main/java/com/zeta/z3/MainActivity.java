@@ -7,6 +7,9 @@ public class MainActivity extends BridgeActivity {
     @Override
     public void onCreate(Bundle savedInstanceState) {
         registerPlugin(ZetaFilesPlugin.class);
+        registerPlugin(ZetaMediaDownloadPlugin.class);
+        registerPlugin(ZetaBackupsPlugin.class);
+        registerPlugin(ZetaUpdatesPlugin.class);
         registerPlugin(ZetaPlayerPlugin.class);
         registerPlugin(ZetaVerificationPlugin.class);
         super.onCreate(savedInstanceState);

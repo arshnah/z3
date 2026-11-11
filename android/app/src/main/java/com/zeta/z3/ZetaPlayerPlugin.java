@@ -30,6 +30,7 @@ public class ZetaPlayerPlugin extends Plugin {
     private final ConcurrentHashMap<String, SettableFuture<String>> onlineRequests = new ConcurrentHashMap<>();
     private ListenableFuture<MediaController> connecting;
     private MediaController controller;
+    private String playbackRevision = "";
     private volatile boolean onlineBridgeReady;
     private final Handler handler = new Handler(Looper.getMainLooper());
     private final Runnable ticker = new Runnable() {
@@ -52,7 +53,8 @@ public class ZetaPlayerPlugin extends Plugin {
                         @Override public void onEvents(Player player, Player.Events events) { emitState(); }
                         @Override public void onPlayerError(PlaybackException error) {
                             JSObject value = new JSObject();
-                            value.put("message", error.getMessage());
+                            android.util.Log.e("ZetaPlayback", "Playback failed (" + error.getErrorCodeName() + ")", error);
+                            value.put("message", error.getMessage() + " (" + error.getErrorCodeName() + ")");
                             value.put("id", controller.getCurrentMediaItem() == null ? "" : controller.getCurrentMediaItem().mediaId);
                             notifyListeners("playbackError", value);
                         }
@@ -65,6 +67,15 @@ public class ZetaPlayerPlugin extends Plugin {
                 }
             }, ContextCompat.getMainExecutor(getContext()));
         });
+    }
+
+    static boolean widgetNavigation(String command) {
+        ZetaPlayerPlugin plugin = onlineBridge;
+        if (plugin == null || !plugin.onlineBridgeReady) return false;
+        var data = new JSObject();
+        data.put("command", command);
+        plugin.notifyListeners("widgetCommand", data);
+        return true;
     }
 
     static ListenableFuture<String> requestOnline(String event, JSObject payload) {
@@ -150,15 +161,39 @@ public class ZetaPlayerPlugin extends Plugin {
             player.setMediaItem(item, (long) (call.getDouble("position", 0.0) * 1000));
             player.setPlayWhenReady(!call.getBoolean("paused", true));
             player.prepare();
+            acknowledgePlayback(call);
         });
     }
 
     @PluginMethod public void setPaused(PluginCall call) {
-        run(call, player -> { if (call.getBoolean("paused", true)) player.pause(); else player.play(); });
+        run(call, player -> {
+            player.setPlayWhenReady(!call.getBoolean("paused", true));
+            acknowledgePlayback(call);
+        });
+    }
+
+    private void acknowledgePlayback(PluginCall call) {
+        playbackRevision = call.getString("revision", playbackRevision);
+        emitState();
     }
     @PluginMethod public void seek(PluginCall call) {
         run(call, player -> player.seekTo((long) (Math.max(0, call.getDouble("position", 0.0)) * 1000)));
     }
+    @PluginMethod public void setAudioEffects(PluginCall call) {
+        run(call, player -> {
+            PlaybackService service = PlaybackService.active;
+            if (service != null) {
+                var values = call.getArray("bands");
+                double[] bands = new double[5];
+                for (int index = 0; index < bands.length; index++) {
+                    double value = values == null ? 0 : values.optDouble(index, 0);
+                    bands[index] = Double.isFinite(value) ? Math.max(-6, Math.min(6, value)) : 0;
+                }
+                service.setAudioEffects(bands, call.getBoolean("leveling", false));
+            }
+        });
+    }
+
     @PluginMethod public void setVolume(PluginCall call) {
         run(call, player -> player.setVolume((float) Math.max(0, Math.min(1, call.getDouble("volume", 1.0)))));
     }
@@ -180,6 +215,7 @@ public class ZetaPlayerPlugin extends Plugin {
         state.put("position", controller.getCurrentPosition() / 1000.0);
         state.put("duration", Math.max(0, controller.getDuration()) / 1000.0);
         state.put("paused", !controller.getPlayWhenReady());
+        state.put("revision", playbackRevision);
         state.put("ready", controller.getPlaybackState() == Player.STATE_READY);
         state.put("ended", controller.getPlaybackState() == Player.STATE_ENDED);
         notifyListeners("state", state);

@@ -67,13 +67,40 @@ audio uses temporary cache storage. Music providers still require internet acces
 and may restrict availability by region or change their verification requirements.
 
 The Android library uses private app storage and is separate from desktop. Removing
-the app removes this library. Desktop music folders, FTP/SFTP, Muzza backups, and
+the app removes this library. Desktop music folders, FTP/SFTP, and
 Discord presence are desktop features. Android visualizers animate without the
 desktop player's live audio analysis.
 
 Android also has a native share sheet for song links and downloaded audio files,
 optional haptic feedback, and an option to keep the screen awake while playing.
 These preferences are available in Settings and persist across restarts.
+
+## Updates and library transfers
+
+Zeta checks GitHub Releases at launch and in **Settings → Updates**. Supported
+desktop packages download updates in the background and offer **Restart and install**.
+Unsigned macOS builds, Windows MSI installs, and portable Windows builds open
+the GitHub release page.
+On Android, **Install update** verifies the GitHub APK and opens Android's
+installer. Android may ask you to allow installs from Zeta first.
+
+**Settings → Zeta backup** saves a `.zetabackup` file on desktop or Android.
+Import it on the other device to merge songs, playlists, favourites, and listening
+history. Include downloaded audio if it fits within the 128 MiB backup limit.
+The backup excludes account credentials and browser cookies.
+
+**Settings → Nearby devices** pairs devices on the same Wi-Fi for direct backup
+transfer, playback control, and listening parties. Scan the invitation on the
+joining device, then scan its reply on the host. Pairing codes can also be
+copied and pasted. Guest devices can queue songs and optionally follow playback.
+
+To build a separate Android test install, run `npm run android:sync`, then
+`cd android && ./gradlew -PzetaLocalTest assembleDebug`. The APK installs as
+**Zeta Test** alongside Zeta with its own library.
+
+**Settings → Muzza** reads and writes Muzza's `.backup` format on both platforms.
+Muzza backups transfer library metadata, playlists, likes, and listening history.
+They do not carry the audio files.
 
 ## Last.fm and ListenBrainz
 

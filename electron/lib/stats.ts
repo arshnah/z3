@@ -12,6 +12,7 @@
  */
 
 import { encode, decode } from '@msgpack/msgpack';
+import { mergeBackupEvents } from '../../src/lib/zeta-backup';
 
 import type { VFS } from './vfs';
 
@@ -95,6 +96,15 @@ export class StatsStore {
         const stats = await this.load();
         stats.events.push(event);
         if (name) stats.names[event.songId] = name;
+        await this.persist();
+    }
+
+    async mergeEvents(events: ZetaEvent[], alsoKnown: ZetaEvent[], names: Record<string, SongName>): Promise<void> {
+        const stats = await this.load();
+        const added = mergeBackupEvents([...stats.events, ...alsoKnown], events);
+        if (!added.length && !Object.keys(names).some((id) => !Object.hasOwn(stats.names, id))) return;
+        stats.events.push(...added);
+        stats.names = { ...names, ...stats.names };
         await this.persist();
     }
 
