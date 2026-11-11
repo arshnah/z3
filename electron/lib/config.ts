@@ -17,11 +17,15 @@ export interface AppConfig {
      */
     musicDir: string;
     discordRpcEnabled: boolean;
+    youtubeCookiesFile: string | null;
+    youtubeBrowserProfileId: string | null;
 }
 
 const defaults: AppConfig = {
     musicDir: DEFAULT_MUSIC_DIR,
     discordRpcEnabled: true,
+    youtubeCookiesFile: null,
+    youtubeBrowserProfileId: null,
 };
 
 /**

@@ -289,9 +289,11 @@ export const androidClient: Routes = {
         if (!response.ok) return null;
         return { data: new Uint8Array(await response.arrayBuffer()), mimetype: response.headers.get('content-type') || 'image/jpeg' };
     },
-    async getSettings() { return { musicDir: 'On this device', isRemote: false, discordRpcEnabled: false }; },
+    async getSettings() { return { musicDir: 'On this device', isRemote: false, discordRpcEnabled: false, youtubeCookiesConfigured: false, youtubeBrowserProfileId: null }; },
     async setDiscordRpcEnabled() { return false; },
     setMusicDir: unsupported, pickMusicDirectory: unsupported,
+    pickYoutubeCookies: unsupported, clearYoutubeCookies: unsupported,
+    listYoutubeBrowserProfiles: unsupported, setYoutubeBrowserProfile: unsupported,
     muzzaExport: unsupported, muzzaImport: unsupported, muzzaExportTo: unsupported, muzzaImportFrom: unsupported,
     m3uImport: unsupported, m3uImportFrom: unsupported, spotifyPlaylistImport: unsupported,
     spotifyPlaylistImportFrom: unsupported, youtubePlaylistImport: unsupported,

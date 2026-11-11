@@ -13,7 +13,7 @@ const QUALITY_PREFERENCE_KEYS = {
     download: "zeta:download-quality",
 } as const;
 
-const MAX_BITRATE_KBPS: Record<AudioQuality, number> = {
+export const MAX_BITRATE_KBPS: Record<AudioQuality, number> = {
     best: Infinity,
     high: 256,
     medium: 160,

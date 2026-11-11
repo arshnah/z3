@@ -41,6 +41,8 @@ const MUSIC_ROUTES = [
     'musicRepairMetadata',
     'fetchImage',
     'getSettings',
+    'listYoutubeBrowserProfiles',
+    'setYoutubeBrowserProfile',
     'setMusicDir',
     'setDiscordRpcEnabled',
     'muzzaExportTo',
@@ -52,14 +54,15 @@ const MUSIC_ROUTES = [
     'statsSummary',
 ] as const satisfies readonly (keyof Music)[];
 
-// Compile-time check that every backend route above is listed (and so exposed).
-type Unlisted = Exclude<keyof Music, (typeof MUSIC_ROUTES)[number]>;
+// Cookie settings are reached through the native file dialog below.
+// Require every other backend route to be listed here.
+type Unlisted = Exclude<keyof Music, (typeof MUSIC_ROUTES)[number] | 'setYoutubeCookiesFile'>;
 const _everyRouteListed: [Unlisted] extends [never] ? true : Unlisted = true;
 void _everyRouteListed;
 
 const music = Object.fromEntries(
     MUSIC_ROUTES.map((name) => [name, (...args: unknown[]) => callBackend(name, args)]),
-) as unknown as Music;
+) as unknown as Pick<Music, (typeof MUSIC_ROUTES)[number]>;
 
 /* --------------------------------- dialogs -------------------------------- */
 // Native dialogs need the main process; the backend then does the actual work.
@@ -75,6 +78,20 @@ function backupTimestamp(): string {
 }
 
 const dialogs = {
+    async pickYoutubeCookies(): Promise<boolean | null> {
+        const picked = await dialog.showOpenDialog(parentWindow(), {
+            title: 'Choose a YouTube cookies.txt file',
+            properties: ['openFile'],
+            filters: [{ name: 'Cookies text file', extensions: ['txt'] }],
+        });
+        if (picked.canceled || picked.filePaths.length === 0) return null;
+        return callBackend<boolean>('setYoutubeCookiesFile', [picked.filePaths[0]]);
+    },
+
+    async clearYoutubeCookies(): Promise<void> {
+        await callBackend('setYoutubeCookiesFile', [null]);
+    },
+
     /** Open a native folder picker (local directories only). Returns null if cancelled. */
     async pickMusicDirectory(): Promise<string | null> {
         const result = await dialog.showOpenDialog(parentWindow(), {

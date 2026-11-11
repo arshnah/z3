@@ -1,4 +1,6 @@
 <script lang="ts">
+    import { onMount } from "svelte";
+    import { client } from "$lib/ephaptic";
     import Icon from "$lib/components/Icon.svelte";
     import { settingsState } from "$lib/state/settings.svelte";
     import { playerState, setAutoplay } from "$lib/state/player.svelte";
@@ -10,6 +12,28 @@
     import { androidPreferences } from '$lib/state/android.svelte';
     import ScrobblingSettings from '$lib/components/ScrobblingSettings.svelte';
     import AudioQualityPicker from '$lib/components/AudioQualityPicker.svelte';
+
+    let browserProfiles = $state<Awaited<ReturnType<typeof client.listYoutubeBrowserProfiles>>>([]);
+    let selectedBrowserProfile = $state('');
+    let loadingBrowserProfiles = $state(true);
+
+    const activeBrowserProfile = $derived(browserProfiles.find(({ id }) => id === settingsState.youtubeBrowserProfileId));
+
+    async function refreshBrowserProfiles() {
+        loadingBrowserProfiles = true;
+        try {
+            browserProfiles = await client.listYoutubeBrowserProfiles();
+            if (!browserProfiles.some(({ id }) => id === selectedBrowserProfile)) selectedBrowserProfile = '';
+        } catch (error) {
+            toasts.error(error);
+        } finally {
+            loadingBrowserProfiles = false;
+        }
+    }
+
+    onMount(() => {
+        if (!isAndroid) void refreshBrowserProfiles();
+    });
 
     let importing = $state(false);
     async function importMusic() {
@@ -119,6 +143,50 @@
             {/if}
         </div>
     </section>
+
+    {#if !isAndroid}
+    <section class="group">
+        <h2><Icon name="play" /> YouTube</h2>
+        <div class="card block">
+            <p class="muted">If built-in YouTube playback fails, Zeta can retry using yt-dlp installed on your PATH.</p>
+            <p class="muted">For videos that require sign-in, choose the browser profile where you’re signed in to YouTube.</p>
+            <div class="btn-row">
+                <select class="input" aria-label="YouTube browser profile" bind:value={selectedBrowserProfile}
+                    disabled={loadingBrowserProfiles || !browserProfiles.length || settingsState.updatingYoutubeCookies}>
+                    <option value="">
+                        {loadingBrowserProfiles ? 'Looking for browsers…' : browserProfiles.length ? 'Choose a browser profile' : 'No browser profiles found'}
+                    </option>
+                    {#each browserProfiles as profile (profile.id)}
+                        <option value={profile.id}>{profile.browser} · {profile.name}</option>
+                    {/each}
+                </select>
+                <button class="btn"
+                    disabled={!selectedBrowserProfile || selectedBrowserProfile === settingsState.youtubeBrowserProfileId || settingsState.loading || settingsState.updatingYoutubeCookies}
+                    onclick={() => settingsState.useYoutubeBrowserProfile(selectedBrowserProfile)}>Use browser cookies</button>
+                <button class="btn" disabled={loadingBrowserProfiles} onclick={refreshBrowserProfiles}>Refresh browsers</button>
+            </div>
+            {#if settingsState.youtubeBrowserProfileId}
+                <small class="subtle" role="status">
+                    {activeBrowserProfile
+                        ? `Using ${activeBrowserProfile.browser} · ${activeBrowserProfile.name}`
+                        : loadingBrowserProfiles ? 'Checking saved browser profile…' : 'Saved browser profile is unavailable.'}
+                </small>
+            {:else if settingsState.youtubeCookiesConfigured}
+                <small class="subtle" role="status">Using a cookies.txt file.</small>
+            {/if}
+            <div class="btn-row">
+                <button class="btn" disabled={settingsState.loading || settingsState.updatingYoutubeCookies}
+                    onclick={() => settingsState.updateYoutubeCookies()}>
+                    <Icon name="folder-open" /> Choose cookies.txt file
+                </button>
+                {#if settingsState.youtubeCookiesConfigured}
+                    <button class="btn" disabled={settingsState.loading || settingsState.updatingYoutubeCookies}
+                        onclick={() => settingsState.updateYoutubeCookies(true)}>Clear cookie source</button>
+                {/if}
+            </div>
+        </div>
+    </section>
+    {/if}
 
     <section class="group">
         <h2><Icon name="download" /> Audio quality</h2>

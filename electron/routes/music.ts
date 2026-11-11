@@ -27,6 +27,8 @@ import { COVER_SCHEME, coverUrl } from '../../src/lib/covers';
 import { createVFS, type VFS } from '../lib/vfs';
 import { getConfig, saveConfig } from '../lib/config';
 import { mintPoToken } from '../lib/potoken';
+import { downloadWithYtDlp, readYoutubeCookies } from '../lib/yt-dlp';
+import { findBrowserProfiles } from '../lib/browser-profiles';
 import { MetadataStore, embedMp4Tags, readAudioTags, type IndexRecord } from '../lib/metadata';
 import { buildMuzzaBackup, parseMuzzaBackup, readMuzzaEventsFromDb, type MuzzaEvent } from '../lib/muzza';
 import { StatsStore } from '../lib/stats';
@@ -34,7 +36,7 @@ import { comparableText, lyricsfileToLrc } from '../lib/lyricsfile';
 import { routes as scrobbling } from '../lib/scrobbling';
 import { musicText, youtubeArtistNames, youtubeArtists } from '../../src/lib/music-metadata';
 import { parseExportifyCsv } from '../../src/lib/playlist-import';
-import { chooseAudioFormat, isAudioQuality, type AudioQuality } from '../../src/lib/audio-quality';
+import { chooseAudioFormat, isAudioQuality, MAX_BITRATE_KBPS, type AudioQuality } from '../../src/lib/audio-quality';
 import {
     fetchArtistAllSongs,
     fetchArtistDetails,
@@ -270,15 +272,7 @@ async function downloadYtAudio(videoId: string, quality: AudioQuality = 'best'):
         const anyAudioFormats = formats.filter((format) => format.has_audio && !format.has_video);
         const selected = chooseAudioFormat(mp4Formats, quality, (format) => format.bitrate / 1000)
             ?? chooseAudioFormat(anyAudioFormats, quality, (format) => format.bitrate / 1000);
-        const maxBitrate = quality === 'high'
-            ? 256
-            : quality === 'medium'
-              ? 160
-              : quality === 'low'
-                ? 96
-                : quality === 'skype-2008'
-                  ? 8
-                  : Infinity;
+        const maxBitrate = MAX_BITRATE_KBPS[quality];
         const eligible = quality === 'best'
             ? [...mp4Formats, ...anyAudioFormats]
             : [...mp4Formats, ...anyAudioFormats].filter((format) => format.bitrate / 1000 <= maxBitrate);
@@ -329,6 +323,22 @@ async function webStreamToBuffer(stream: ReadableStream<Uint8Array>): Promise<Bu
         if (value) chunks.push(Buffer.from(value));
     }
     return Buffer.concat(chunks);
+}
+
+async function fetchYoutubeAudio(videoId: string, quality: AudioQuality): Promise<Buffer> {
+    try {
+        await init();
+        return await webStreamToBuffer(await downloadYtAudio(videoId, quality));
+    } catch {
+        const { youtubeCookiesFile, youtubeBrowserProfileId } = getConfig();
+        const profile = youtubeBrowserProfileId
+            ? (await findBrowserProfiles()).find(({ id }) => id === youtubeBrowserProfileId)
+            : undefined;
+        if (youtubeBrowserProfileId && !profile) {
+            throw new Error('The selected browser profile is unavailable. Choose a profile or cookies file in Settings.');
+        }
+        return downloadWithYtDlp(videoId, quality, { cookiesFile: youtubeCookiesFile, browserProfile: profile?.ytDlpSource });
+    }
 }
 
 function pickBestThumbnail(thumbnails: Thumbnail[]): Thumbnail | undefined {
@@ -1170,17 +1180,7 @@ export const routes = {
                 return { data: new Uint8Array(await vfs.readFile(file)), mimetype: audioMimetype(file), savedToDisk: true };
             }
             case 'yt': {
-                await init();
-                try {
-                    audio = await webStreamToBuffer(await downloadYtAudio(cleanId, quality));
-                } catch (err: any) {
-                    if (err?.info?.error_type === 'UNPLAYABLE' || /unplayable/i.test(String(err?.message))) {
-                        throw new Error(
-                            'This track is unplayable on YouTube — it may be region-locked, age-restricted, private, or removed.',
-                        );
-                    }
-                    throw err;
-                }
+                audio = await fetchYoutubeAudio(cleanId, quality);
                 break;
             }
             case 'js': {
@@ -1589,9 +1589,31 @@ export const routes = {
 
     /* ------------------------------ settings ------------------------------ */
 
-    async getSettings(): Promise<{ musicDir: string; isRemote: boolean; discordRpcEnabled: boolean }> {
-        const { musicDir, discordRpcEnabled } = getConfig();
-        return { musicDir, isRemote: /^(sftp|ftp|ftps):\/\//i.test(musicDir), discordRpcEnabled };
+    async getSettings() {
+        const { musicDir, discordRpcEnabled, youtubeCookiesFile, youtubeBrowserProfileId } = getConfig();
+        return {
+            musicDir,
+            isRemote: /^(sftp|ftp|ftps):\/\//i.test(musicDir),
+            discordRpcEnabled,
+            youtubeCookiesConfigured: !!youtubeCookiesFile || !!youtubeBrowserProfileId,
+            youtubeBrowserProfileId,
+        };
+    },
+
+    async setYoutubeCookiesFile(path: string | null): Promise<boolean> {
+        if (path !== null) await readYoutubeCookies(path);
+        return !!saveConfig({ youtubeCookiesFile: path, youtubeBrowserProfileId: null }).youtubeCookiesFile;
+    },
+
+    async listYoutubeBrowserProfiles() {
+        return (await findBrowserProfiles()).map(({ id, browser, name }) => ({ id, browser, name }));
+    },
+
+    async setYoutubeBrowserProfile(id: string): Promise<void> {
+        if (!(await findBrowserProfiles()).some((profile) => profile.id === id)) {
+            throw new Error('That browser profile is unavailable. Refresh the browser list and choose again.');
+        }
+        saveConfig({ youtubeBrowserProfileId: id, youtubeCookiesFile: null });
     },
 
     async setDiscordRpcEnabled(enabled: boolean): Promise<boolean> {
@@ -2120,23 +2142,23 @@ async function downloadSong(track?: Song, trackId?: string, quality: AudioQualit
         await metadata.upsert(record);
         return MetadataStore.toSong(record);
     } else if (protocol === 'yt') {
-        await init();
-        const info = await yt.music.getInfo(cleanId);
-        title = track?.title || info.basic_info.title || 'Untitled';
-        const author = info.basic_info.author ?? info.basic_info.channel?.name ?? 'Unknown Artist';
+        audio = await fetchYoutubeAudio(cleanId, quality);
+        // Metadata is best-effort when the built-in YouTube client is unavailable.
+        const info = await init().then(() => yt.music.getInfo(cleanId)).catch(() => null);
+        title = track?.title || info?.basic_info.title || 'Untitled';
+        const author = info?.basic_info.author ?? info?.basic_info.channel?.name ?? 'Unknown Artist';
         if (!artists.length) artists = [{ name: author, thumbnails: [] }];
-        duration = track?.duration || info.basic_info.duration || 0;
-        if (!thumbnails.length && info.basic_info.thumbnail?.length) {
+        duration = track?.duration || info?.basic_info.duration || 0;
+        if (!thumbnails.length && info?.basic_info.thumbnail?.length) {
             thumbnails = info.basic_info.thumbnail.map((t) => ({ url: t.url, width: t.width, height: t.height }));
         }
-        if (!lyrics) {
+        if (!lyrics && info) {
             try {
                 lyrics = (await info.getLyrics())?.description.text ?? null;
             } catch {
                 /* no lyrics */
             }
         }
-        audio = await webStreamToBuffer(await downloadYtAudio(cleanId, quality));
     } else if (protocol === 'js') {
         const meta = (await Saavn.getById({ songIds: cleanId })).songs?.[0];
         title = track?.title || meta?.title || 'Untitled';

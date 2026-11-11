@@ -17,6 +17,9 @@ class SettingsStore {
     musicDir = $state<string>("");
     isRemote = $state<boolean>(false);
     discordRpcEnabled = $state<boolean>(false);
+    youtubeCookiesConfigured = $state(false);
+    youtubeBrowserProfileId = $state<string | null>(null);
+    updatingYoutubeCookies = $state(false);
     streamingQuality = $state<AudioQuality>(browser ? getStreamingQuality() : "best");
     downloadQuality = $state<AudioQuality>(browser ? getDownloadQuality() : "best");
     preferLocalSearchResults = $state<boolean>(
@@ -33,10 +36,12 @@ class SettingsStore {
     async load() {
         this.loading = true;
         try {
-            const { musicDir, isRemote, discordRpcEnabled } = await client.getSettings();
+            const { musicDir, isRemote, discordRpcEnabled, youtubeCookiesConfigured, youtubeBrowserProfileId } = await client.getSettings();
             this.musicDir = musicDir;
             this.isRemote = isRemote;
             this.discordRpcEnabled = discordRpcEnabled;
+            this.youtubeCookiesConfigured = youtubeCookiesConfigured;
+            this.youtubeBrowserProfileId = youtubeBrowserProfileId;
         } catch (err) {
             toasts.error(err);
         } finally {
@@ -80,6 +85,40 @@ class SettingsStore {
             this.discordRpcEnabled = await client.setDiscordRpcEnabled(enabled);
         } catch (err) {
             toasts.error(err);
+        }
+    }
+
+    async updateYoutubeCookies(remove = false) {
+        this.updatingYoutubeCookies = true;
+        try {
+            if (remove) {
+                await client.clearYoutubeCookies();
+                this.youtubeCookiesConfigured = false;
+                this.youtubeBrowserProfileId = null;
+            } else {
+                const configured = await client.pickYoutubeCookies();
+                if (configured !== null) {
+                    this.youtubeCookiesConfigured = configured;
+                    this.youtubeBrowserProfileId = null;
+                }
+            }
+        } catch (err) {
+            toasts.error(err);
+        } finally {
+            this.updatingYoutubeCookies = false;
+        }
+    }
+
+    async useYoutubeBrowserProfile(id: string) {
+        this.updatingYoutubeCookies = true;
+        try {
+            await client.setYoutubeBrowserProfile(id);
+            this.youtubeCookiesConfigured = true;
+            this.youtubeBrowserProfileId = id;
+        } catch (err) {
+            toasts.error(err);
+        } finally {
+            this.updatingYoutubeCookies = false;
         }
     }
 
