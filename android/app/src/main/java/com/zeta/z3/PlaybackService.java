@@ -5,16 +5,19 @@ import android.content.Intent;
 import android.net.Uri;
 import android.util.Log;
 import android.util.Base64;
+import androidx.annotation.OptIn;
 import androidx.media3.common.AudioAttributes;
 import androidx.media3.common.C;
 import androidx.media3.common.MediaItem;
 import androidx.media3.common.MediaMetadata;
+import androidx.media3.common.util.UnstableApi;
 import androidx.media3.datasource.DefaultHttpDataSource;
 import androidx.media3.exoplayer.ExoPlayer;
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory;
 import androidx.media3.session.LibraryResult;
 import androidx.media3.session.MediaLibraryService;
 import androidx.media3.session.MediaSession;
+import androidx.media3.session.SessionError;
 import com.getcapacitor.JSObject;
 import com.google.common.collect.ImmutableList;
 import com.google.common.util.concurrent.Futures;
@@ -76,7 +79,7 @@ public class PlaybackService extends MediaLibraryService {
                     return LibraryResult.ofItemList(ImmutableList.copyOf(children.subList(start, end)), params);
                 } catch (Exception error) {
                     Log.e(TAG, "Could not read the offline library for Android Auto.", error);
-                    return LibraryResult.ofError(LibraryResult.RESULT_ERROR_IO);
+                    return LibraryResult.ofError(SessionError.ERROR_IO);
                 }
             }, libraryExecutor);
         }
@@ -90,11 +93,11 @@ public class PlaybackService extends MediaLibraryService {
                     MediaItem item = stored == null ? null : playableSong(stored);
                     if (item == null) item = findOnlineSong(mediaId);
                     return item == null
-                        ? LibraryResult.ofError(LibraryResult.RESULT_ERROR_BAD_VALUE)
+                        ? LibraryResult.ofError(SessionError.ERROR_BAD_VALUE)
                         : LibraryResult.ofItem(item, null);
                 } catch (Exception error) {
                     Log.e(TAG, "Could not load an offline song for Android Auto.", error);
-                    return LibraryResult.ofError(LibraryResult.RESULT_ERROR_IO);
+                    return LibraryResult.ofError(SessionError.ERROR_IO);
                 }
             }, libraryExecutor);
         }
@@ -108,7 +111,7 @@ public class PlaybackService extends MediaLibraryService {
                 MoreExecutors.directExecutor());
             return Futures.catching(result, Exception.class, error -> {
                 Log.e(TAG, "Online Android Auto search failed.", error);
-                return LibraryResult.ofError(LibraryResult.RESULT_ERROR_IO);
+                return LibraryResult.ofError(SessionError.ERROR_IO);
             }, MoreExecutors.directExecutor());
         }
 
@@ -128,11 +131,12 @@ public class PlaybackService extends MediaLibraryService {
             }, MoreExecutors.directExecutor());
             return Futures.catching(result, Exception.class, error -> {
                 Log.e(TAG, "Could not load online Android Auto search results.", error);
-                return LibraryResult.ofError(LibraryResult.RESULT_ERROR_IO);
+                return LibraryResult.ofError(SessionError.ERROR_IO);
             }, MoreExecutors.directExecutor());
         }
 
         @Override
+        @OptIn(markerClass = UnstableApi.class)
         public ListenableFuture<MediaSession.MediaItemsWithStartPosition> onSetMediaItems(
                 MediaSession session, MediaSession.ControllerInfo controller, List<MediaItem> mediaItems,
                 int startIndex, long startPositionMs) {
@@ -141,24 +145,9 @@ public class PlaybackService extends MediaLibraryService {
                 if (item.localConfiguration != null) {
                     resolved.add(Futures.immediateFuture(item));
                 } else if (isOnlineMediaId(item.mediaId)) {
-                    JSObject request = new JSObject();
-                    request.put("mediaId", item.mediaId.substring(ONLINE_PREFIX.length()));
-                    ListenableFuture<MediaItem> remote = Futures.transform(
-                        ZetaPlayerPlugin.requestOnline("onlineResolve", request),
-                        response -> {
-                            JSONObject audio = parseObject(response);
-                            Uri uri = Uri.parse(audio.optString("url", ""));
-                            if (!"https".equals(uri.getScheme()) || uri.getHost() == null) {
-                                throw new IllegalArgumentException("The provider returned an invalid streaming URL.");
-                            }
-                            return new MediaItem.Builder()
-                                .setMediaId(item.mediaId)
-                                .setUri(uri)
-                                .setMediaMetadata(item.mediaMetadata)
-                                .build();
-                        },
-                        MoreExecutors.directExecutor());
-                    resolved.add(remote);
+                    resolved.add(resolveOnlineSong(item));
+                } else if (item.requestMetadata.searchQuery != null && !item.requestMetadata.searchQuery.trim().isEmpty()) {
+                    resolved.add(resolveSearch(item.requestMetadata.searchQuery));
                 } else {
                     resolved.add(Futures.immediateFailedFuture(
                         new IllegalArgumentException("The selected Android Auto item is not playable.")));
@@ -172,6 +161,7 @@ public class PlaybackService extends MediaLibraryService {
     };
 
     @Override
+    @OptIn(markerClass = UnstableApi.class)
     public void onCreate() {
         super.onCreate();
         Map<String, String> requestHeaders = new HashMap<>();
@@ -192,6 +182,31 @@ public class PlaybackService extends MediaLibraryService {
 
     @Override
     public MediaLibrarySession onGetSession(MediaSession.ControllerInfo controllerInfo) { return session; }
+
+    private ListenableFuture<MediaItem> resolveSearch(String query) {
+        return Futures.transformAsync(searchOnline(query), songs -> {
+            if (songs.isEmpty()) {
+                return Futures.immediateFailedFuture(new IllegalArgumentException("No tracks match the search."));
+            }
+            return resolveOnlineSong(songs.get(0));
+        }, MoreExecutors.directExecutor());
+    }
+
+    private ListenableFuture<MediaItem> resolveOnlineSong(MediaItem item) {
+        JSObject request = new JSObject();
+        request.put("mediaId", item.mediaId.substring(ONLINE_PREFIX.length()));
+        return Futures.transform(
+            ZetaPlayerPlugin.requestOnline("onlineResolve", request),
+            response -> {
+                JSONObject audio = parseObject(response);
+                Uri uri = Uri.parse(audio.optString("url", ""));
+                if (!"https".equals(uri.getScheme()) || uri.getHost() == null) {
+                    throw new IllegalArgumentException("The provider returned an invalid streaming URL.");
+                }
+                return item.buildUpon().setUri(uri).build();
+            },
+            MoreExecutors.directExecutor());
+    }
 
     private ListenableFuture<List<MediaItem>> searchOnline(String query) {
         JSObject request = new JSObject();
