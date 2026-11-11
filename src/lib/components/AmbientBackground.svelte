@@ -9,7 +9,6 @@
      * almost nothing. The beat response is written straight to element styles
      * from the audio analyser, outside Svelte's reactivity.
      */
-    import { onMount } from "svelte";
     import { fade } from "svelte/transition";
     import { analyser } from "$lib/audio/analyser";
     import { artworkState, type RGB } from "$lib/state/artwork.svelte";
@@ -35,8 +34,10 @@
     const shown = RESPONSE.map(() => 1);
     let artShown = 1;
 
-    onMount(() =>
-        analyser.subscribe((f) => {
+    // Lite mode has no living background, so it doesn't listen to the audio at all.
+    $effect(() => {
+        if (ui.lite) return;
+        return analyser.subscribe((f) => {
             if (hidden || !ui.ambientOn) return;
             blobEls.forEach((el, i) => {
                 if (!el) return;
@@ -52,8 +53,8 @@
                 artShown += (target - artShown) * (target > artShown ? 0.4 : 0.1);
                 artEl.style.scale = artShown.toFixed(4);
             }
-        }),
-    );
+        });
+    });
 </script>
 
 <div class="ambient" aria-hidden="true">

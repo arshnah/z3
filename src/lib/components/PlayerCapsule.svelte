@@ -30,7 +30,6 @@
     import { analyser } from "$lib/audio/analyser";
     import { sendArt, receiveArt } from "$lib/transitions";
     import { artistNames, formatTime } from "$lib/utils";
-    import { onMount } from "svelte";
     import { slide } from "svelte/transition";
 
     const track = $derived(playerState.currentTrack);
@@ -58,10 +57,15 @@
         leaveTimer = setTimeout(() => (hovered = false), 450);
     }
 
-    // The glow follows the music's loudness and kicks.
-    onMount(() =>
-        analyser.subscribe((f) => {
-            if (!glowEl || ui.lite) return;
+    // The glow follows the music's loudness and kicks. Lite mode has no glow or
+    // pulse, so it doesn't subscribe: the audio analysis loop can then stop.
+    $effect(() => {
+        if (ui.lite) {
+            if (capsuleEl) capsuleEl.style.scale = "";
+            return;
+        }
+        return analyser.subscribe((f) => {
+            if (!glowEl) return;
             // Always softly lit while there's a track; kicks flare it up.
             const energy = Math.min(1, f.level * 1.4 + f.beat * 1.1 + f.bass * 0.5);
             const lv = playerState.currentTrack ? (playerState.paused ? 0.3 : 0.5 + energy * 0.5) : 0;
@@ -71,8 +75,8 @@
             // capsule pulses so the glow always hugs its edges.
             glowEl.style.opacity = lv.toFixed(3);
             if (capsuleEl) capsuleEl.style.scale = playerState.paused ? "1" : (1 + energy * 0.022).toFixed(4);
-        }),
-    );
+        });
+    });
 
     function sleepMenu(anchor: Element) {
         const set = (v: number | "track" | null, msg: string) => () => {
@@ -134,7 +138,7 @@
             >
                 {#key track.id}
                     <span class="title ellipsis" title={track.title}>{track.title}</span>
-                    {#if !expanded && lyricsState.synced && !playerState.paused}
+                    {#if !ui.lite && !expanded && lyricsState.synced && !playerState.paused}
                         <span class="ticker"><LyricText /></span>
                     {:else}
                     <span class="artist ellipsis">
@@ -166,7 +170,7 @@
         </div>
 
         {#if expanded}
-            <div class="more" transition:slide={{ duration: 260 }}>
+            <div class="more" transition:slide={{ duration: ui.lite ? 120 : 260 }}>
                 <div class="seek">
                     <span class="time">{formatTime(playerState.currentTime)}</span>
                     <Slider value={playerState.currentTime} max={playerState.duration || 0} onchange={seek} format={formatTime} disabled={!playerState.duration} label="Seek" />
