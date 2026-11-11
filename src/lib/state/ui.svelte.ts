@@ -1,12 +1,13 @@
 import { browser } from "$app/environment";
 
 /** "stage" layers live lyrics over the visualizer. */
-export type NowPlayingMode = "lyrics" | "stage" | "visualizer";
+export type NowPlayingMode = "lyrics" | "stage" | "visualizer" | "video";
 export type SidePanel = "queue" | "lyrics" | null;
 
 const PREFS_KEY = "zeta:ui-prefs";
 
 interface UiPrefs {
+    lite: boolean;
     ambient: boolean;
     liquidGlass: boolean;
     visualizerPack: string;
@@ -53,10 +54,20 @@ class UiStore {
     nowPlayingMode = $state<NowPlayingMode>("lyrics");
     sidePanel = $state<SidePanel>(this.prefs.sidePanel ?? null);
     sidebarCollapsed = $state(!!this.prefs.sidebarCollapsed);
+    /** Lite mode: switches off every extra visual (for weak hardware). */
+    lite = $state(!!this.prefs.lite);
     ambient = $state(this.prefs.ambient !== false);
     liquidGlass = $state(this.prefs.liquidGlass !== false);
     visualizerPack = $state(this.prefs.visualizerPack ?? "halo");
     shortcutsOpen = $state(false);
+
+    /** What actually renders: the individual toggles, unless lite mode overrides them. */
+    get ambientOn() {
+        return this.ambient && !this.lite;
+    }
+    get glassOn() {
+        return this.liquidGlass && !this.lite;
+    }
 
     /** Epoch ms at which playback pauses, or "track" to stop after the current song. */
     sleepAt = $state<number | "track" | null>(null);
@@ -67,6 +78,7 @@ class UiStore {
     save() {
         if (!browser) return;
         const prefs: UiPrefs = {
+            lite: this.lite,
             ambient: this.ambient,
             liquidGlass: this.liquidGlass,
             visualizerPack: this.visualizerPack,

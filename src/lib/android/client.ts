@@ -1,4 +1,4 @@
-import { Capacitor, registerPlugin } from '@capacitor/core';
+import { Capacitor, registerPlugin, type PluginListenerHandle } from '@capacitor/core';
 import { Directory, Filesystem } from '@capacitor/filesystem';
 import { FileTransfer } from '@capacitor/file-transfer';
 import type { Routes } from '../../../electron/main';
@@ -6,11 +6,19 @@ import type { Library, Song, Stream } from '../schema';
 import { androidStorage as storage, MUSIC_PATH, rememberSong, requirePlaylist, type StoredSong } from './storage';
 import * as providers from './providers';
 import { androidScrobbling } from './scrobbling';
+import { getStreamingQuality, type AudioQuality } from '../audio-quality';
 
 type LocatedSong = StoredSong & { directory: Directory };
 const downloads = new Map<string, Promise<LocatedSong>>();
 const temporary = new Map<string, LocatedSong>();
 const files = registerPlugin<{ importAudio(): Promise<{ songs: StoredSong[] }> }>('ZetaFiles');
+const onlineBridge = registerPlugin<{
+    addListener(eventName: 'onlineSearch', listenerFunc: (request: { requestId: string; query: string }) => void): Promise<PluginListenerHandle>;
+    addListener(eventName: 'onlineResolve', listenerFunc: (request: { requestId: string; mediaId: string }) => void): Promise<PluginListenerHandle>;
+    setOnlineBridgeReady(options: { ready: boolean }): Promise<void>;
+    completeOnlineRequest(options: { requestId: string; result: string }): Promise<void>;
+    failOnlineRequest(options: { requestId: string; error: string }): Promise<void>;
+}>('ZetaPlayer');
 const unsupported = async (): Promise<never> => { throw new Error('This feature is available in the desktop app.'); };
 const noop = async () => {};
 
@@ -19,6 +27,64 @@ function cacheSongs(songs: Song[]) {
     for (const song of songs) songCache.set(song.id, song);
     return songs;
 }
+
+function errorMessage(error: unknown): string {
+    return error instanceof Error ? error.message : String(error);
+}
+
+async function reportOnlineRequestError(requestId: string, error: unknown) {
+    const message = errorMessage(error);
+    try {
+        await onlineBridge.failOnlineRequest({ requestId, error: message });
+    } catch (bridgeError) {
+        console.error('[android-auto] Could not report an online request failure:', bridgeError);
+    }
+}
+
+const onlineBridgeListeners = Promise.all([
+    onlineBridge.addListener('onlineSearch', async ({ requestId, query }) => {
+        try {
+            const results = await Promise.allSettled([
+                providers.search(query, 'yt'),
+                providers.search(query, 'js'),
+            ]);
+            const available = results.flatMap((result) => {
+                if (result.status === 'fulfilled') return result.value;
+                console.warn('[android-auto] One online music provider search failed:', result.reason);
+                return [];
+            });
+            if (!available.length) {
+                const failures = results
+                    .filter((result): result is PromiseRejectedResult => result.status === 'rejected')
+                    .map((result) => errorMessage(result.reason));
+                throw new Error(`Online search failed: ${failures.join('; ')}`);
+            }
+            const songs = cacheSongs([...new Map(available.map((song) => [song.id, song])).values()]);
+            await onlineBridge.completeOnlineRequest({ requestId, result: JSON.stringify(songs) });
+        } catch (error) {
+            await reportOnlineRequestError(requestId, error);
+        }
+    }),
+    onlineBridge.addListener('onlineResolve', async ({ requestId, mediaId }) => {
+        try {
+            const audio = await providers.resolveAudio(mediaId, getStreamingQuality());
+            await onlineBridge.completeOnlineRequest({ requestId, result: JSON.stringify(audio) });
+        } catch (error) {
+            await reportOnlineRequestError(requestId, error);
+        }
+    }),
+]).then(async (handles) => {
+    await onlineBridge.setOnlineBridgeReady({ ready: true });
+    return handles;
+}).catch((error) => {
+    console.error('[android-auto] Could not initialize online music support:', error);
+    void onlineBridge.setOnlineBridgeReady({ ready: false }).catch((bridgeError) => {
+        console.error('[android-auto] Could not disable the unavailable online music bridge:', bridgeError);
+    });
+    return [] as PluginListenerHandle[];
+});
+
+void onlineBridgeListeners;
 
 async function library(): Promise<Library> {
     const data = await storage.snapshot();
@@ -32,7 +98,7 @@ async function library(): Promise<Library> {
     };
 }
 
-async function download(id: string, track?: Song, save = true): Promise<LocatedSong> {
+async function download(id: string, track?: Song, save = true, quality: AudioQuality = 'best'): Promise<LocatedSong> {
     const requestKey = `${save ? 'saved' : 'cache'}:${id}`;
     const existing = downloads.get(requestKey);
     if (existing) return existing;
@@ -59,7 +125,7 @@ async function download(id: string, track?: Song, save = true): Promise<LocatedS
         }
         const song = track ?? stored?.song ?? songCache.get(id);
         if (!song) throw new Error('Search for this song again before downloading it.');
-        const audio = await providers.resolveAudio(id);
+        const audio = await providers.resolveAudio(id, quality);
         const extension = audio.mimetype.includes('webm') ? 'webm' : 'm4a';
         const directory = save ? Directory.Data : Directory.Cache;
         if (!save) await Filesystem.mkdir({ directory, path: `${MUSIC_PATH}/audio`, recursive: true }).catch((error) => {
@@ -145,18 +211,18 @@ export const androidClient: Routes = {
     },
     musicSearchSuggestions: providers.suggestions,
     musicLyrics: providers.lyrics,
-    async musicStream(id, _encrypted, persist = true, track): Promise<Stream> {
+    async musicStream(id, _encrypted, persist = true, track, quality: AudioQuality = 'best'): Promise<Stream> {
         const state = await storage.snapshot();
         const save = !!state.songs[id]?.file || (persist && !!state.songs[id]);
         // Search-only/preloaded tracks use disposable cache storage, while
         // library tracks are kept offline just as they are on desktop.
-        const stored = await download(id, track, save);
+        const stored = await download(id, track, save, quality);
         const uri = await Filesystem.getUri({ directory: stored.directory, path: stored.file! });
         return { data: new Uint8Array(), url: Capacitor.convertFileSrc(uri.uri), nativeUri: uri.uri, mimetype: stored.mimetype!, savedToDisk: stored.directory === Directory.Data };
     },
-    async musicDownloadSong(track, id) {
+    async musicDownloadSong(track, id, quality: AudioQuality = 'best') {
         if (!track && !id) throw new Error('Choose a song to download.');
-        return (await download(track?.id ?? id!, track)).song;
+        return (await download(track?.id ?? id!, track, true, quality)).song;
     },
     async musicPlaylistCreate(name) {
         const trimmed = name.trim();
@@ -208,10 +274,13 @@ export const androidClient: Routes = {
         return storage.edit((state) => { const p = requirePlaylist(state, id); p.thumbnail = thumbnail; return p; });
     },
     async musicRadio(seed, exclude = []) {
-        const provider = seed.id.startsWith('js:') ? 'js' : 'yt';
-        const songs = await androidClient.musicSearch(`${seed.artists[0]?.name ?? ''} ${seed.title}`, provider);
-        const omitted = new Set([seed.id, ...exclude]);
-        return songs.filter((s) => !omitted.has(s.id)).slice(0, 20);
+        const data = await storage.snapshot();
+        const downloaded = new Set(Object.entries(data.songs).filter(([, song]) => song.file).map(([id]) => id));
+        const songs = await providers.radio(seed, exclude, downloaded);
+        return cacheSongs(songs.map((song) => ({
+            ...song,
+            isDownloaded: !!data.songs[song.id]?.file,
+        })));
     },
     async musicRepairMetadata() { return { repaired: [], remaining: 0 }; },
     async musicCover() { return null; },

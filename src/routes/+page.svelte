@@ -151,4 +151,48 @@
             grid-template-columns: repeat(2, minmax(0, 1fr));
         }
     }
+    /* lite mode: flat tiles, no hue gradients or glow. Music (the one that works)
+       is the bright primary; the rest are quiet and dim. */
+    :global(:root.lite) .launch {
+        gap: 36px;
+    }
+    :global(:root.lite) header p {
+        color: var(--text-3);
+        font-size: 15px;
+    }
+    :global(:root.lite) .tiles {
+        grid-template-columns: repeat(4, 150px);
+        gap: 12px;
+    }
+    :global(:root.lite) .tile {
+        height: 150px;
+        padding: 16px;
+        border-radius: var(--r-xl);
+        background-color: var(--surface-1);
+        border: 1px solid var(--border);
+        color: var(--text-2);
+        font-size: 17px;
+        font-weight: 650;
+        transition: transform 0.15s ease-out, background-color 0.15s ease-out, border-color 0.15s ease-out !important;
+    }
+    :global(:root.lite) .tile:not(.off) {
+        background-color: var(--text);
+        border-color: var(--text);
+        color: #000;
+    }
+    :global(:root.lite) .tile:hover:not(.off) {
+        transform: translateY(-2px);
+        background-color: #fff;
+    }
+    :global(:root.lite) .tile:active:not(.off) {
+        transform: scale(0.98);
+    }
+    :global(:root.lite) .tile.off {
+        opacity: 0.5;
+    }
+    @media (max-width: 800px) {
+        :global(:root.lite) .tiles {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+    }
 </style>

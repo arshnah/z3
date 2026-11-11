@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { filterPlaylistRecommendations, filterRecommendationsByArtist } from '../src/lib/playlist-recommendations.ts';
+import { filterPlaylistRecommendations, filterRadioRecommendations, filterRecommendationsByArtist } from '../src/lib/playlist-recommendations.ts';
 
 function song(id, title, artists) {
     return {
@@ -57,4 +57,21 @@ test('keeps recommendations to one song per credited artist', () => {
     ];
 
     assert.deepEqual(filterRecommendationsByArtist(recommendations).map((track) => track.id), ['yt:a', 'yt:d', 'yt:e']);
+});
+
+test('radio excludes the seed and known songs, removes cross-provider duplicates, and diversifies artists', () => {
+    const seed = song('yt:seed', 'Seed Song', ['Seed Artist']);
+    const known = [song('js:known', 'Already Heard', ['Known Artist'])];
+    const recommendations = [
+        song('yt:seed-copy', 'Seed Song', ['Seed Artist']),
+        song('yt:known-copy', 'Already Heard', ['Known Artist']),
+        song('yt:a', 'First', ['Artist One']),
+        song('yt:b', 'Second', ['Artist One']),
+        song('yt:c', 'Third', ['Artist Two']),
+    ];
+
+    assert.deepEqual(
+        filterRadioRecommendations(seed, recommendations, known, 4).map((track) => track.id),
+        ['yt:a', 'yt:c', 'yt:b'],
+    );
 });

@@ -95,7 +95,10 @@
     }
     @media (max-width: 600px) {
         :global([data-os="android"]) .world:has(:global(.search)) main {
-            padding-top: calc(var(--titlebar-h) + 128px);
+            padding-top: calc(var(--titlebar-h) + 146px);
+        }
+        :global([data-os="android"]) :global(.page) {
+            padding: 8px 18px 40px;
         }
     }
 </style>

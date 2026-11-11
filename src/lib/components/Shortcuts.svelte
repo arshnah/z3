@@ -16,7 +16,7 @@
         [["Q"], "Queue"],
         [["Y"], "Lyrics panel"],
         [["F"], "Full-screen player"],
-        [["V"], "Visualizer"],
+        [["V"], "Cycle player modes"],
         [["Ctrl", "K"], "Search"],
         [["?"], "This list"],
     ];
@@ -26,7 +26,7 @@
     <!-- svelte-ignore a11y_click_events_have_key_events -->
     <!-- svelte-ignore a11y_no_static_element_interactions -->
     <div class="backdrop" transition:fade={{ duration: 160 }} onclick={() => (ui.shortcutsOpen = false)}>
-        <div class="sheet glass" use:liquidGlass={{ enabled: ui.liquidGlass, depth: 10, blur: 12 }} transition:scale={{ start: 0.94, duration: 240 }}>
+        <div class="sheet glass" use:liquidGlass={{ enabled: ui.glassOn, depth: 10, blur: 12 }} transition:scale={{ start: 0.94, duration: 240 }}>
             <h3>Keyboard shortcuts</h3>
             <div class="list">
                 {#each SHORTCUTS as [keys, label]}

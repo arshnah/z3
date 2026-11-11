@@ -97,7 +97,7 @@
     <div class="catcher" onclick={() => ui.closeMenu()} oncontextmenu={(e) => { e.preventDefault(); ui.closeMenu(); }}></div>
     <div
         class="menu glass"
-        use:liquidGlass={{ enabled: ui.liquidGlass && !isAndroid, depth: 7, blur: 10 }}
+        use:liquidGlass={{ enabled: ui.glassOn && !isAndroid, depth: 7, blur: 10 }}
         bind:this={menuEl}
         style:left="{pos.x}px"
         style:top="{pos.y}px"

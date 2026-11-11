@@ -4,9 +4,15 @@
 	import { onMount } from 'svelte';
 	import { isAndroid } from '$lib/platform';
 	import { ui } from '$lib/state/ui.svelte';
+	import { artworkState } from '$lib/state/artwork.svelte';
 	import { androidPreferences } from '$lib/state/android.svelte';
 
 	let { children } = $props();
+
+	$effect(() => {
+		document.documentElement.classList.toggle('lite', ui.lite);
+		artworkState.restyle();
+	});
 
 	onMount(() => {
 		if (!isAndroid) return;

@@ -16,7 +16,7 @@
     import { ui } from "$lib/state/ui.svelte";
     import { liquidGlass } from "$lib/liquid-glass";
     import { debounce } from "$lib/utils";
-    import type { Artist, CollectionSummary, Song } from "$lib/schema";
+    import type { Artist, CollectionSummary, SearchExtras, Song } from "$lib/schema";
     import { fly } from "svelte/transition";
     import { tick } from "svelte";
     import { isAndroid } from '$lib/platform';
@@ -35,8 +35,15 @@
     let suggestionsLoading = $state(false);
     let showSuggestions = $state(false);
     let highlighted = $state(-1);
+    let suggestionRequest = 0;
     let libraryOpen = $state(false);
+    let providerPicker = $state<HTMLDetailsElement>();
     let libraryTimer: ReturnType<typeof setTimeout>;
+    const providers = [
+        { id: "yt", label: "YouTube Music" },
+        { id: "js", label: "JioSaavn" },
+    ] as const;
+    const selectedProvider = $derived(providers.find((provider) => provider.id === searchState.provider)!);
     const normalizeMatch = (value: string) => value.normalize("NFD").replace(/\p{M}/gu, "").toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
     const exactSong = $derived.by(() => {
         const query = normalizeMatch(searchState.query);
@@ -52,7 +59,7 @@
         if (onSearch) tick().then(() => !searchState.results.length && input?.focus());
     });
 
-    const fetchSuggestions = debounce(async (q: string, provider: typeof searchState.provider) => {
+    const fetchSuggestions = debounce((q: string, provider: typeof searchState.provider, request: number) => {
         if (!q.trim()) {
             suggestions = [];
             quickItems = [];
@@ -60,22 +67,40 @@
             return;
         }
         suggestionsLoading = true;
-        const [textResults, songResults, extraResults] = await Promise.allSettled([
-            client.musicSearchSuggestions(q),
-            client.musicSearch(q, provider),
-            client.musicSearchExtras(q, provider),
-        ]);
-        if (q !== searchState.query || provider !== searchState.provider) return;
-        suggestions = textResults.status === "fulfilled" ? textResults.value.slice(0, 5) : [];
-        const songs = songResults.status === "fulfilled" ? songResults.value.slice(0, 4) : [];
-        const extras = extraResults.status === "fulfilled" ? extraResults.value : { artists: [], albums: [], playlists: [] };
-        quickItems = [
-            ...songs.map((value) => ({ kind: "song" as const, value })),
-            ...extras.artists.slice(0, 2).map((value) => ({ kind: "artist" as const, value })),
-            ...extras.albums.slice(0, 2).map((value) => ({ kind: "collection" as const, value })),
-            ...extras.playlists.slice(0, 2).map((value) => ({ kind: "collection" as const, value })),
-        ];
-        suggestionsLoading = false;
+        const isCurrent = () => request === suggestionRequest && q === searchState.query && provider === searchState.provider;
+        let songs: Song[] = [];
+        let extras: SearchExtras = { artists: [], albums: [], playlists: [] };
+        let pending = 3;
+        const finishRequest = () => {
+            if (isCurrent() && --pending === 0) suggestionsLoading = false;
+        };
+        const updateQuickItems = () => {
+            if (!isCurrent()) return;
+            quickItems = [
+                ...songs.slice(0, 4).map((value) => ({ kind: "song" as const, value })),
+                ...extras.artists.slice(0, 2).map((value) => ({ kind: "artist" as const, value })),
+                ...extras.albums.slice(0, 2).map((value) => ({ kind: "collection" as const, value })),
+                ...extras.playlists.slice(0, 2).map((value) => ({ kind: "collection" as const, value })),
+            ];
+        };
+
+        void client.musicSearchSuggestions(q).then((results) => {
+            if (isCurrent()) suggestions = results.slice(0, 5);
+        }).catch((error) => {
+            if (isCurrent()) console.warn("[search] Text suggestions failed:", error);
+        }).finally(finishRequest);
+        void client.musicSearch(q, provider).then((results) => {
+            songs = results;
+            updateQuickItems();
+        }).catch((error) => {
+            if (isCurrent()) console.warn("[search] Song suggestions failed:", error);
+        }).finally(finishRequest);
+        void client.musicSearchExtras(q, provider).then((results) => {
+            extras = results;
+            updateQuickItems();
+        }).catch((error) => {
+            if (isCurrent()) console.warn("[search] Artist and album suggestions failed:", error);
+        }).finally(finishRequest);
     }, 320);
 
     function selectQuickItem(item: QuickItem) {
@@ -133,11 +158,39 @@
         clearTimeout(libraryTimer);
         libraryTimer = setTimeout(() => (libraryOpen = false), 220);
     }
+
+    function chooseProvider(provider: typeof providers[number]["id"]) {
+        searchState.provider = provider;
+        if (providerPicker) providerPicker.open = false;
+        if (searchState.query.trim()) submit();
+    }
+
+    function closeProviderPicker(event: MouseEvent) {
+        if (providerPicker && event.target instanceof Node && !providerPicker.contains(event.target)) {
+            providerPicker.open = false;
+        }
+    }
+
+    function handleProviderEscape(event: KeyboardEvent) {
+        if (event.key === "Escape" && providerPicker?.open) {
+            providerPicker.open = false;
+            providerPicker.querySelector("summary")?.focus();
+        }
+    }
 </script>
 
+<svelte:window onclick={closeProviderPicker} onkeydown={handleProviderEscape} />
+
 <div class="dock-wrap">
-    <nav class="dock" class:searching={onSearch} use:liquidGlass={{ enabled: ui.liquidGlass, depth: 10, blur: 9 }}>
-        <a class="mark" href="/music" title="Zeta">ζ</a>
+    <nav class="dock" class:searching={onSearch} use:liquidGlass={{ enabled: ui.glassOn, depth: 10, blur: 9 }}>
+        <a
+            class="mark"
+            class:home-active={isActive("/music")}
+            href="/music"
+            aria-label="Home"
+            aria-current={isActive("/music") ? "page" : undefined}
+            title="Home"
+        >ζ</a>
 
         <div class="arrows">
             <button class="icon-btn sm" title="Back" onclick={() => history.back()}><Icon name="chevron-left" /></button>
@@ -145,8 +198,15 @@
         </div>
 
         <div class="items">
-            <a href="/music" class="item" aria-label="Home" class:active={isActive("/music")}><Icon name="sparkles" /><span>Home</span></a>
-
+            {#if isAndroid}
+                <a
+                    href="/music"
+                    class="item"
+                    aria-label="Home"
+                    aria-current={isActive("/music") ? "page" : undefined}
+                    class:active={isActive("/music")}
+                ><Icon name="house" /><span>Home</span></a>
+            {/if}
             <form
                 class="search"
                 onsubmit={(e) => {
@@ -160,6 +220,7 @@
                     bind:this={input}
                     bind:value={searchState.query}
                     placeholder="Songs, artists, moods…"
+                    aria-label="Search songs, artists, albums, and playlists"
                     autocomplete="off"
                     spellcheck="false"
                     oninput={() => {
@@ -168,11 +229,11 @@
                         suggestions = [];
                         quickItems = [];
                         suggestionsLoading = !!searchState.query.trim();
-                        fetchSuggestions(searchState.query, searchState.provider);
+                        fetchSuggestions(searchState.query, searchState.provider, ++suggestionRequest);
                     }}
                     onfocus={() => {
                         showSuggestions = true;
-                        if (searchState.query.trim()) fetchSuggestions(searchState.query, searchState.provider);
+                        if (searchState.query.trim()) fetchSuggestions(searchState.query, searchState.provider, ++suggestionRequest);
                     }}
                     onblur={() => setTimeout(() => (showSuggestions = false), 150)}
                     onkeydown={onKey}
@@ -190,10 +251,23 @@
                         <Icon name="x" />
                     </button>
                 {/if}
-                <select class="provider" bind:value={searchState.provider} onchange={() => searchState.query.trim() && submit()} title="Source">
-                    <option value="yt">YouTube Music</option>
-                    <option value="js">JioSaavn</option>
-                </select>
+                <details class="provider-picker" bind:this={providerPicker}>
+                    <summary aria-label={`Search source: ${selectedProvider.label}`} aria-haspopup="listbox">
+                        <span>{selectedProvider.label}</span>
+                        <Icon name="chevron-down" />
+                    </summary>
+                    <div class="provider-menu" role="listbox" aria-label="Search source">
+                        {#each providers as provider}
+                            <button
+                                type="button"
+                                role="option"
+                                aria-selected={searchState.provider === provider.id}
+                                class:selected={searchState.provider === provider.id}
+                                onclick={() => chooseProvider(provider.id)}
+                            >{provider.label}</button>
+                        {/each}
+                    </div>
+                </details>
             </form>
 
             <!-- svelte-ignore a11y_no_static_element_interactions -->
@@ -227,7 +301,10 @@
 
         <div class="tail">
             <button class="icon-btn sm" title="Keyboard shortcuts (?)" onclick={() => (ui.shortcutsOpen = true)}><Icon name="keyboard" /></button>
-            <a class="icon-btn sm" class:on={isActive("/music/settings")} title="Settings" href="/music/settings"><Icon name="settings-2" /></a>
+            <a class="icon-btn sm" class:on={isActive("/music/settings")} aria-label="Settings" title="Settings" href="/music/settings">
+                <Icon name="settings-2" />
+                <span class="android-nav-label">Settings</span>
+            </a>
         </div>
     </nav>
 
@@ -237,8 +314,8 @@
                 <span><kbd>↑</kbd><kbd>↓</kbd> Navigate</span>
                 <span><kbd>Enter</kbd> Search</span>
             </div>
-            {#if suggestionsLoading && !quickItems.length && !suggestions.length}
-                <div class="suggestions-loading"><Icon name="loader-circle" /> Finding songs, artists, and albums…</div>
+            {#if suggestionsLoading}
+                <div class="suggestions-loading" role="status"><Icon name="loader-circle" /> Finding songs, artists, and albums…</div>
             {/if}
             {#if exactSong}
                 {@render quickRow(exactSong, 0)}
@@ -359,6 +436,9 @@
     .mark:hover {
         transform: rotate(-14deg) scale(1.06);
     }
+    .mark.home-active {
+        box-shadow: 0 0 0 2px var(--text), 0 0 22px -4px var(--accent-glow);
+    }
     .arrows {
         display: flex;
         padding-right: 4px;
@@ -429,19 +509,73 @@
         width: 16px;
         height: 16px;
     }
-    .provider {
-        height: 32px;
-        padding: 0 8px;
-        border-radius: var(--r-full);
-        background: rgb(0 0 0 / 0.3);
-        border: none;
-        color: var(--text-2);
-        font: 600 12px var(--font);
-        cursor: pointer;
-        outline: none;
+    .provider-picker {
+        position: relative;
+        flex: 0 0 auto;
     }
-    .provider option {
-        background: #16131f;
+    .provider-picker summary {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 7px;
+        min-height: 32px;
+        padding: 0 10px;
+        border: 1px solid rgb(255 255 255 / 0.12);
+        border-radius: var(--r-full);
+        color: var(--text-2);
+        background: rgb(0 0 0 / 0.24);
+        font: 600 12px var(--font);
+        white-space: nowrap;
+        cursor: pointer;
+        list-style: none;
+    }
+    .provider-picker summary::-webkit-details-marker {
+        display: none;
+    }
+    .provider-picker summary :global(svg) {
+        width: 14px;
+        height: 14px;
+        color: var(--text-3);
+        transition: transform 140ms ease;
+    }
+    .provider-picker[open] summary :global(svg) {
+        transform: rotate(180deg);
+    }
+    .provider-picker summary:focus-visible,
+    .provider-menu button:focus-visible {
+        outline: 2px solid var(--accent);
+        outline-offset: 2px;
+    }
+    .provider-menu {
+        position: absolute;
+        top: calc(100% + 7px);
+        right: 0;
+        z-index: 60;
+        display: grid;
+        width: max-content;
+        min-width: 100%;
+        gap: 3px;
+        padding: 5px;
+        border: 1px solid rgb(255 255 255 / 0.13);
+        border-radius: 12px;
+        background: rgb(20 17 29);
+        box-shadow: 0 10px 28px rgb(0 0 0 / 0.55);
+    }
+    .provider-menu button {
+        padding: 8px 10px;
+        border: 0;
+        border-radius: 8px;
+        color: var(--text-2);
+        background: transparent;
+        font: 600 12px var(--font);
+        text-align: left;
+        white-space: nowrap;
+        cursor: pointer;
+    }
+    .provider-menu button:hover,
+    .provider-menu button.selected {
+        color: var(--text);
+        background: rgb(255 255 255 / 0.1);
     }
     .tail {
         display: flex;
@@ -532,6 +666,25 @@
         border-radius: 22px;
         background: rgb(16 13 24 / 0.85);
         box-shadow: var(--shadow-lg);
+    }
+    .android-nav-label { display: none; }
+    :global([data-os="android"]) .dock-wrap {
+        top: calc(env(safe-area-inset-top, 0px) + 8px);
+        width: calc(100vw - 24px);
+        max-width: 520px;
+    }
+    :global([data-os="android"]) .item {
+        min-height: 44px;
+    }
+    :global([data-os="android"]) .item span {
+        display: inline;
+        font-size: 11px;
+    }
+    :global([data-os="android"]) .search {
+        height: 46px;
+    }
+    :global([data-os="android"]) .provider-picker summary {
+        min-height: 40px;
     }
     .search-hints {
         display: flex;
@@ -686,20 +839,93 @@
         :global([data-os="android"]) .dock {
             width: calc(100vw - 28px);
             height: auto;
-            min-height: 56px;
+            min-height: 0;
             flex-wrap: wrap;
+            align-content: flex-start;
+            gap: 4px 2px;
             padding: 8px;
-            border-radius: 24px;
+            border: 1px solid rgb(255 255 255 / 0.12);
+            border-radius: 22px;
+            background: rgb(12 10 18 / 0.94);
+            box-shadow: 0 18px 44px -22px rgb(0 0 0 / 0.9), inset 0 1px 0 rgb(255 255 255 / 0.08);
         }
         :global([data-os="android"]) .items { display: contents; }
         :global([data-os="android"]) .search {
             order: 2;
             width: 100%;
-            flex-basis: 100%;
-            margin-top: 6px;
+            flex: 0 0 100%;
+            margin-top: 4px;
+            padding-left: 12px;
+            border-radius: 15px;
+            background: rgb(255 255 255 / 0.075);
+            box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.08);
         }
-        :global([data-os="android"]) .tail { margin-left: auto; }
-        :global([data-os="android"]) .item { padding: 0 10px; }
-        :global([data-os="android"]) .provider { max-width: 124px; }
+        :global([data-os="android"]) .lib { order: 1; }
+        :global([data-os="android"]) .items > .item,
+        :global([data-os="android"]) .lib > .item,
+        :global([data-os="android"]) .tail > a {
+            order: 1;
+            display: flex;
+            flex: 1 1 0;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            gap: 4px;
+            min-width: 0;
+            height: 54px;
+            padding: 4px 2px;
+            border-radius: 15px;
+            color: var(--text-3);
+        }
+        :global([data-os="android"]) .tail { display: contents; }
+        :global([data-os="android"]) .item {
+            font-size: 11.5px;
+            font-weight: 650;
+            letter-spacing: 0;
+        }
+        :global([data-os="android"]) .item.active,
+        :global([data-os="android"]) .tail > a.on {
+            color: var(--accent);
+            background: color-mix(in srgb, var(--accent) 13%, transparent);
+        }
+        :global([data-os="android"]) .item span,
+        :global([data-os="android"]) .android-nav-label {
+            display: block;
+            overflow: hidden;
+            max-width: 100%;
+            font-size: 11px;
+            line-height: 1.1;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        :global([data-os="android"]) .item :global(svg),
+        :global([data-os="android"]) .tail > a :global(svg) {
+            width: 19px;
+            height: 19px;
+        }
+        :global([data-os="android"]) .provider-picker { max-width: 118px; }
+        :global([data-os="android"]) .provider-picker summary {
+            min-height: 38px;
+            gap: 4px;
+            padding-inline: 9px;
+            border-radius: 12px;
+            background: rgb(255 255 255 / 0.075);
+        }
+        :global([data-os="android"]) .provider-picker summary span { font-size: 11px; }
+        :global([data-os="android"]) .suggestions {
+            width: 100%;
+            max-height: min(54vh, 440px);
+            overflow-y: auto;
+            border: 1px solid var(--border-strong);
+            border-radius: 20px;
+            background: rgb(12 10 18 / 0.98);
+        }
+        :global([data-os="android"]) .sugg { min-height: 48px; }
+        :global([data-os="android"]) .quick-sugg { min-height: 56px; }
+        :global([data-os="android"]) .quick-add {
+            width: 44px;
+            height: 44px;
+            flex-basis: 44px;
+        }
     }
 </style>

@@ -9,6 +9,7 @@
     import { toasts } from '$lib/state/toast.svelte';
     import { androidPreferences } from '$lib/state/android.svelte';
     import ScrobblingSettings from '$lib/components/ScrobblingSettings.svelte';
+    import AudioQualityPicker from '$lib/components/AudioQualityPicker.svelte';
 
     let importing = $state(false);
     async function importMusic() {
@@ -120,8 +121,52 @@
     </section>
 
     <section class="group">
+        <h2><Icon name="download" /> Audio quality</h2>
+        <div class="card rows">
+            <div class="row">
+                <div>
+                    <strong>Streaming quality</strong>
+                    <p>Quality used when playing music from online providers.</p>
+                </div>
+                <AudioQualityPicker
+                    label="Streaming quality"
+                    value={settingsState.streamingQuality}
+                    onchange={(quality) => settingsState.setStreamingQuality(quality)}
+                />
+            </div>
+            <div class="row">
+                <div>
+                    <strong>Download quality</strong>
+                    <p>Quality used when saving music for offline listening.</p>
+                </div>
+                <AudioQualityPicker
+                    label="Download quality"
+                    value={settingsState.downloadQuality}
+                    onchange={(quality) => settingsState.setDownloadQuality(quality)}
+                />
+            </div>
+        </div>
+    </section>
+
+    <section class="group">
         <h2><Icon name="sparkles" /> Appearance</h2>
         <div class="card rows">
+            <div class="row">
+                <div>
+                    <strong>Lite mode</strong>
+                    <p>For slower PCs. Turns off the living background, liquid glass, visualizers and animations.</p>
+                </div>
+                <button
+                    class="switch"
+                    role="switch"
+                    aria-label="Lite mode"
+                    aria-checked={ui.lite}
+                    onclick={() => {
+                        ui.lite = !ui.lite;
+                        ui.save();
+                    }}
+                ></button>
+            </div>
             <div class="row">
                 <div>
                     <strong>Living background</strong>

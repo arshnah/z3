@@ -2,6 +2,7 @@ import { CapacitorHttp } from '@capacitor/core';
 import { Song as Saavn } from '@saavn-labs/sdk';
 import { Innertube, Parser, Platform } from 'youtubei.js/web';
 import type { ArtistDetails, CollectionDetails, MusicProvider, SearchExtras, Song } from '../schema';
+import { chooseAudioFormat, type AudioQuality } from '../audio-quality';
 import {
     fetchArtistAllSongs,
     fetchArtistDetails,
@@ -62,6 +63,51 @@ export async function search(query: string, provider: MusicProvider): Promise<So
         .filter((s): s is Song => s !== null);
 }
 
+export async function radio(seed: Song, exclude: string[] = [], downloaded = new Set<string>()): Promise<Song[]> {
+    const omitted = new Set([...exclude, seed.id]);
+    if (seed.id.startsWith('js:')) {
+        try {
+            const recommendations = await Saavn.getRecommendations({ songId: seed.id.slice(3) });
+            const songs = (recommendations ?? [])
+                .map((song) => saavnToSong(song, downloaded))
+                .filter((song) => !omitted.has(song.id));
+            if (songs.length) return songs;
+        } catch (error) {
+            console.warn('[radio] JioSaavn recommendations failed, falling back to YouTube Music:', error);
+        }
+    }
+
+    const tube = await yt();
+    let videoId = seed.id.startsWith('yt:') ? seed.id.slice(3) : null;
+    if (!videoId) {
+        const query = `${seed.title} ${seed.artists.map((artist) => artist.name).join(' ')}`.trim();
+        const result = await tube.music.search(query, { type: 'song' });
+        const candidates = ytSearchItems(result, 'song', 'songs')
+            .map((item) => ytToSong(item, downloaded))
+            .filter((song): song is Song => song !== null);
+        const title = normalizeRadioText(seed.title);
+        const artists = new Set(seed.artists.map((artist) => normalizeRadioText(artist.name)));
+        const match = candidates.find((candidate) =>
+            normalizeRadioText(candidate.title) === title
+            && candidate.artists.some((artist) => artists.has(normalizeRadioText(artist.name))),
+        );
+        videoId = match?.id.startsWith('yt:') ? match.id.slice(3) : null;
+    }
+    if (!videoId) return [];
+
+    const panel = await tube.music.getUpNext(videoId, true);
+    return (panel?.contents ?? []).flatMap((item: any) => {
+        const video = item?.video_id ? item : item?.primary ?? item?.content;
+        if (!video?.video_id || omitted.has(`yt:${video.video_id}`)) return [];
+        const song = ytToSong({ ...video, id: video.video_id }, downloaded);
+        return song ? [song] : [];
+    });
+}
+
+function normalizeRadioText(value: string) {
+    return value.normalize('NFKD').replace(/\p{Diacritic}/gu, '').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
+}
+
 export async function searchExtras(query: string, provider: MusicProvider): Promise<SearchExtras> {
     return searchMusicExtras(async () => (await yt()).music, query, provider);
 }
@@ -98,22 +144,28 @@ export async function suggestions(query: string): Promise<string[]> {
     });
 }
 
-export async function resolveAudio(id: string): Promise<{ url: string; mimetype: string }> {
+export async function resolveAudio(id: string, quality: AudioQuality = 'best'): Promise<{ url: string; mimetype: string }> {
     if (id.startsWith('js:')) {
         const song = (await Saavn.getById({ songIds: id.slice(3) })).songs?.[0];
         const encrypted = song?.media?.encryptedUrl;
         if (!encrypted) throw new Error('JioSaavn did not return audio for this song.');
         const formats = await Saavn.experimental.fetchStreamUrls(encrypted, 'edge', true);
-        const best = formats.toSorted((a, b) => parseInt(b.bitrate) - parseInt(a.bitrate))[0];
-        if (!best) throw new Error('No playable JioSaavn audio was found.');
-        return { url: best.url, mimetype: 'audio/mp4' };
+        const selected = chooseAudioFormat(formats, quality, (format) => Number.parseInt(format.bitrate, 10));
+        if (!selected) throw new Error('No playable JioSaavn audio was found.');
+        return { url: selected.url, mimetype: 'audio/mp4' };
     }
     if (!id.startsWith('yt:')) throw new Error('This song is not available on the phone. Import its audio file first.');
     const tube = await yt();
     const { mintPoToken } = await import('./potoken');
     const token = await mintPoToken(id.slice(3));
     const info = await tube.getBasicInfo(id.slice(3), { client: 'YTMUSIC' });
-    const format = info.chooseFormat({ type: 'audio', quality: 'best', format: 'mp4' });
+    const formats = info.streaming_data?.adaptive_formats ?? [];
+    const mp4Formats = formats.filter((format) => format.has_audio && !format.has_video && format.mime_type.includes('audio/mp4'));
+    const anyAudioFormats = formats.filter((format) => format.has_audio && !format.has_video);
+    const format =
+        chooseAudioFormat(mp4Formats, quality, (candidate) => candidate.bitrate / 1000)
+        ?? chooseAudioFormat(anyAudioFormats, quality, (candidate) => candidate.bitrate / 1000)
+        ?? info.chooseFormat({ type: 'audio', quality: 'best', format: 'mp4' });
     const url = new URL(await format.decipher(tube.session.player));
     url.searchParams.set('pot', token);
     if (format.content_length) url.searchParams.set('range', `0-${Number(format.content_length) - 1}`);

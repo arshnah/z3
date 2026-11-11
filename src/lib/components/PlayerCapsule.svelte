@@ -25,13 +25,11 @@
     } from "$lib/state/player.svelte";
     import { libraryState } from "$lib/state/library.svelte";
     import { ui, type MenuItem } from "$lib/state/ui.svelte";
-    import { liquidGlass } from "$lib/liquid-glass";
     import { toasts } from "$lib/state/toast.svelte";
     import { trackMenu } from "$lib/actions";
     import { analyser } from "$lib/audio/analyser";
     import { sendArt, receiveArt } from "$lib/transitions";
     import { artistNames, formatTime } from "$lib/utils";
-    import { onMount } from "svelte";
     import { slide } from "svelte/transition";
 
     const track = $derived(playerState.currentTrack);
@@ -59,9 +57,14 @@
         leaveTimer = setTimeout(() => (hovered = false), 450);
     }
 
-    // The glow follows the music's loudness and kicks.
-    onMount(() =>
-        analyser.subscribe((f) => {
+    // The glow follows the music's loudness and kicks. Lite mode has no glow or
+    // pulse, so it doesn't subscribe: the audio analysis loop can then stop.
+    $effect(() => {
+        if (ui.lite) {
+            if (capsuleEl) capsuleEl.style.scale = "";
+            return;
+        }
+        return analyser.subscribe((f) => {
             if (!glowEl) return;
             // Always softly lit while there's a track; kicks flare it up.
             const energy = Math.min(1, f.level * 1.4 + f.beat * 1.1 + f.bass * 0.5);
@@ -72,8 +75,8 @@
             // capsule pulses so the glow always hugs its edges.
             glowEl.style.opacity = lv.toFixed(3);
             if (capsuleEl) capsuleEl.style.scale = playerState.paused ? "1" : (1 + energy * 0.022).toFixed(4);
-        }),
-    );
+        });
+    });
 
     function sleepMenu(anchor: Element) {
         const set = (v: number | "track" | null, msg: string) => () => {
@@ -103,7 +106,6 @@
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div
     class="capsule"
-    use:liquidGlass={{ enabled: ui.liquidGlass, depth: 14, blur: 10 }}
     class:expanded
     class:empty={!track}
     class:playing={track && !playerState.paused}
@@ -136,7 +138,7 @@
             >
                 {#key track.id}
                     <span class="title ellipsis" title={track.title}>{track.title}</span>
-                    {#if !expanded && lyricsState.synced && !playerState.paused}
+                    {#if !ui.lite && !expanded && lyricsState.synced && !playerState.paused}
                         <span class="ticker"><LyricText /></span>
                     {:else}
                     <span class="artist ellipsis">
@@ -168,7 +170,7 @@
         </div>
 
         {#if expanded}
-            <div class="more" transition:slide={{ duration: 260 }}>
+            <div class="more" transition:slide={{ duration: ui.lite ? 120 : 260 }}>
                 <div class="seek">
                     <span class="time">{formatTime(playerState.currentTime)}</span>
                     <Slider value={playerState.currentTime} max={playerState.duration || 0} onchange={seek} format={formatTime} disabled={!playerState.duration} label="Seek" />
@@ -481,8 +483,47 @@
         padding-bottom: 3px;
     }
     @media (max-width: 600px) {
+        :global([data-os="android"]) .capsule {
+            width: calc(100vw - 24px);
+            padding: 6px;
+            border-radius: 22px;
+            background: rgb(12 10 18 / 0.96);
+            box-shadow: 0 16px 40px -18px rgb(0 0 0 / 0.9), inset 0 1px 0 rgb(255 255 255 / 0.09);
+        }
         :global([data-os="android"]) .tools { flex-wrap: wrap; justify-content: center; }
         :global([data-os="android"]) .vol { display: none; }
         :global([data-os="android"]) .main > .icon-btn { width: 32px; flex-shrink: 0; }
+        :global([data-os="android"]) .idle {
+            width: 100%;
+            min-width: 0;
+            gap: 10px;
+            padding-right: 10px;
+            font-size: 12px;
+        }
+        :global([data-os="android"]) .idle > span:not(.idle-mark) {
+            flex: 1;
+            min-width: 0;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        :global([data-os="android"]) .idle-mark,
+        :global([data-os="android"]) .idle > :global(svg) {
+            flex-shrink: 0;
+        }
+    }
+    /* lite mode: a very light open/close instead of an instant snap. The width and
+       corner radius ease over 180ms (one small fixed element), and the border
+       brightens a touch under the pointer. */
+    :global(:root.lite) .capsule {
+        transition-property: width, border-radius, opacity, transform, background-color, border-color !important;
+        transition-duration: 0.18s !important;
+        transition-timing-function: ease-out !important;
+    }
+    :global(:root.lite) .capsule:hover {
+        border-color: var(--text-4) !important;
+    }
+    :global(:root.lite) .capsule .play:active,
+    :global(:root.lite) .capsule .icon-btn:active {
+        transform: scale(0.92);
     }
 </style>

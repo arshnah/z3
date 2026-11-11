@@ -1,8 +1,10 @@
 import { browser } from "$app/environment";
 import { client } from "$lib/ephaptic";
 import type { Stream, Song, Playlist } from "$lib/schema";
-import { shuffle, isSyncedLyrics, songKey, slimSong } from "$lib/utils";
+import { shuffle, isSyncedLyrics, slimSong } from "$lib/utils";
 import { libraryState } from "$lib/state/library.svelte";
+import { getStreamingQuality } from "$lib/audio-quality";
+import { filterRadioRecommendations } from "$lib/playlist-recommendations";
 
 export interface CacheRecord {
     stream: Stream,
@@ -213,7 +215,7 @@ export function getUpcomingTrack(): Song | null {
 
     // End of the context: only wraps when repeating. A shuffled wrap reshuffles,
     // so we can't know the next track yet.
-    if (playerState.repeat === "all") return playerState.shuffle ? null : trackById(ids[0]);
+    if (playerState.repeat === "all" && !isRadioContext()) return playerState.shuffle ? null : trackById(ids[0]);
     return autoplayCandidate();
 }
 
@@ -237,7 +239,7 @@ export function getUpcomingContext(limit = 50): Song[] {
 
 export function isNextTrackAvailable() {
     if (getUpcomingTrack()) return true;
-    return playerState.repeat === "all" && contextIds().length > 0;
+    return playerState.repeat === "all" && !isRadioContext() && contextIds().length > 0;
 }
 
 export function isPreviousTrackAvailable() {
@@ -358,7 +360,7 @@ export function nextTrack() {
         return;
     }
 
-    if (playerState.repeat !== "all" || !ids.length) {
+    if (playerState.repeat !== "all" || isRadioContext() || !ids.length) {
         startAutoplay();
         return;
     }
@@ -409,13 +411,14 @@ function startAutoplay() {
 
 /** How many tracks are left before playback would stop (ignoring autoplay). */
 function remainingBeforeEnd(): number {
-    if (playerState.repeat !== "off" && contextIds().length) return Infinity;
     const ids = contextIds();
+    if (!isRadioContext() && playerState.repeat !== "off" && ids.length) return Infinity;
     return playerState.upNext.length + Math.max(0, ids.length - 1 - anchorPosition(ids));
 }
 
 let autoplayFetching: string | null = null;
 let autoplayRetried: string | null = null;
+let radioRequest = 0;
 
 /**
  * Keep suggestions topped up: once fewer than two tracks remain, fetch songs
@@ -428,9 +431,11 @@ export async function refreshAutoplay() {
     if (remainingBeforeEnd() >= 2) return;
     const inRadio = isRadioContext();
     if (!inRadio && playerState.autoplaySeed?.id === seed.id && playerState.autoplayTracks.length) return;
-    if (autoplayFetching === seed.id) return;
+    const context = playerState.currentPlaylist;
+    const fetchKey = `${context?.id ?? "single"}:${seed.id}`;
+    if (autoplayFetching === fetchKey) return;
 
-    autoplayFetching = seed.id;
+    autoplayFetching = fetchKey;
     try {
         const known = [
             ...playerState._history.slice(-100).map((h) => h.track),
@@ -440,10 +445,14 @@ export async function refreshAutoplay() {
         ];
         const exclude = new Set(known.map((t) => t.id));
         // The same song often exists under several uploads/ids; match by name too.
-        const knownKeys = new Set(known.map(songKey));
         const suggestions = await client.musicRadio(slimSong($state.snapshot(seed) as Song), [...exclude]);
-        const fresh = suggestions.filter((t) => !exclude.has(t.id) && !knownKeys.has(songKey(t))).slice(0, 25);
-        if (playerState.currentTrack?.id !== seed.id || !fresh.length) return;
+        if (
+            playerState.currentTrack?.id !== seed.id
+            || playerState.currentPlaylist !== context
+            || !playerState.autoplay
+        ) return;
+        const fresh = filterRadioRecommendations(seed, suggestions, known, 25);
+        if (!fresh.length) return;
 
         if (isRadioContext()) {
             playerState.currentPlaylist!.tracks.push(...fresh);
@@ -451,17 +460,22 @@ export async function refreshAutoplay() {
             playerState.autoplaySeed = seed;
             playerState.autoplayTracks = fresh;
         }
+        autoplayRetried = null;
     } catch (err) {
         console.warn("[autoplay] Could not fetch suggestions:", err);
         // Transient failures (network, backend still starting): try once more.
-        if (autoplayRetried !== seed.id) {
-            autoplayRetried = seed.id;
+        if (autoplayRetried !== fetchKey) {
+            autoplayRetried = fetchKey;
             setTimeout(() => {
-                if (playerState.currentTrack?.id === seed.id) refreshAutoplay();
+                if (
+                    playerState.currentTrack?.id === seed.id
+                    && playerState.currentPlaylist === context
+                    && playerState.autoplay
+                ) refreshAutoplay();
             }, 8000);
         }
     } finally {
-        autoplayFetching = null;
+        if (autoplayFetching === fetchKey) autoplayFetching = null;
     }
 }
 
@@ -474,11 +488,20 @@ export function setAutoplay(enabled: boolean) {
 
 /** Start a radio station seeded from a track ("Go to song radio"). */
 export async function startRadio(seed: Song) {
+    const request = ++radioRequest;
+    const currentTrackId = playerState.currentTrack?.id;
+    const currentContext = playerState.currentPlaylist;
     const suggestions = await client.musicRadio(slimSong($state.snapshot(seed) as Song), []);
+    if (
+        request !== radioRequest
+        || playerState.currentTrack?.id !== currentTrackId
+        || playerState.currentPlaylist !== currentContext
+    ) return;
+    const tracks = filterRadioRecommendations(seed, suggestions, [], 50);
     const radio: Playlist = {
         id: `${RADIO_PREFIX}${Date.now()}`,
         name: `${seed.title} Radio`,
-        tracks: [seed, ...suggestions.filter((t) => t.id !== seed.id)],
+        tracks: [seed, ...tracks],
         createdAt: Date.now(),
         isProtected: true,
     };
@@ -688,7 +711,13 @@ export function loadTrack(track: Song | null): Promise<void> {
 
         // Only the audio gates playback. A stream failure propagates so callers
         // can surface it to the user.
-        const stream = await client.musicStream(track.id, undefined, true, slimSong($state.snapshot(track) as Song));
+        const stream = await client.musicStream(
+            track.id,
+            undefined,
+            true,
+            slimSong($state.snapshot(track) as Song),
+            getStreamingQuality(),
+        );
 
         // If fetching this track also saved it to disk, reflect that in the library.
         if (stream.savedToDisk) libraryState.markDownloaded(track.id, track);
