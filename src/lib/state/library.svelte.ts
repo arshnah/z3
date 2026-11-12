@@ -5,6 +5,17 @@ import { toasts } from "$lib/state/toast.svelte";
 import { isAndroid } from '$lib/platform';
 import { findLocalTrackMatch } from '$lib/local-track-match';
 import { getDownloadQuality } from '$lib/audio-quality';
+import { bestThumbnailUrl } from '$lib/utils';
+
+/** Bytes + mimetype -> base64 data URI, for storing covers inside playlists. */
+function dataUriFromImage(data: Uint8Array, mimetype: string): string {
+    let binary = "";
+    const chunk = 0x8000;
+    for (let i = 0; i < data.length; i += chunk) {
+        binary += String.fromCharCode(...data.subarray(i, i + chunk));
+    }
+    return `data:${mimetype || "image/jpeg"};base64,${btoa(binary)}`;
+}
 
 export const FAVOURITES_ID = "favourites.m3u8";
 
@@ -171,7 +182,7 @@ class LibraryStore {
             this.update(playlistId, (p) => ({
                 ...p,
                 tracks: p.tracks.map((t) => (t.id === track.id ? saved : t)),
-                thumbnail: p.thumbnail || saved.thumbnails.find((t) => t.url)?.url,
+                thumbnail: p.thumbnail || bestThumbnailUrl(saved.thumbnails),
             }));
             if (saved.isDownloaded) this.markDownloaded(saved.id);
         } catch (err) {
@@ -229,7 +240,7 @@ class LibraryStore {
                         tracks: p.tracks.some((t) => t.id === saved.id)
                             ? p.tracks.map((t) => (t.id === saved.id ? saved : t))
                             : [...p.tracks, saved],
-                        thumbnail: p.thumbnail || saved.thumbnails.find((t) => t.url)?.url,
+                        thumbnail: p.thumbnail || bestThumbnailUrl(saved.thumbnails),
                     }));
                     if (saved.isDownloaded) this.markDownloaded(saved.id, saved);
                     added++;
@@ -295,7 +306,15 @@ class LibraryStore {
 
     async saveThumbnail(playlistId: string, thumbnailDataURI: string): Promise<Playlist | null> {
         try {
-            const updated = await client.musicPlaylistUpdateThumbnail(playlistId, thumbnailDataURI);
+            // Save pixels, not a link: remote URLs break offline and can rot.
+            // Remote artwork needs the backend fetcher (no CORS in the renderer).
+            let stored = thumbnailDataURI;
+            if (!stored.startsWith("data:")) {
+                const fetched = await client.fetchImage(stored).catch(() => null);
+                if (fetched) stored = dataUriFromImage(fetched.data, fetched.mimetype);
+                // else keep the URL: a link beats no cover at all.
+            }
+            const updated = await client.musicPlaylistUpdateThumbnail(playlistId, stored);
             if (updated) this.update(playlistId, () => updated);
             return updated;
         } catch (err) {

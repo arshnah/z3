@@ -66,7 +66,10 @@ export function mergeBackupEvents(existing: BackupEvent[], incoming: BackupEvent
 }
 
 export function backupImage(url?: string): string | undefined {
-    return typeof url === 'string' && /^https:\/\//i.test(url) ? url : undefined;
+    // Keep remote links and stored data URIs (saved covers); anything else
+    // (e.g. blob: or zeta-cover: renders) is session-local and meaningless
+    // outside this device.
+    return typeof url === 'string' && /^(https:\/\/|data:image\/)/i.test(url) ? url : undefined;
 }
 
 function text(value: unknown): string {

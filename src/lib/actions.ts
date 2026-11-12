@@ -8,7 +8,7 @@ import { toasts } from "$lib/state/toast.svelte";
 import { ui, type MenuItem } from "$lib/state/ui.svelte";
 import { isAndroid } from '$lib/platform';
 import { splitArtistCredits } from "$lib/music-metadata";
-import { updateThumbnailUrl } from "$lib/utils";
+import { bestThumbnailUrl } from "$lib/utils";
 
 export function artistHref(artist: { id?: string; name: string }, providerHint?: MusicProvider): string {
     const name = (artist.name ?? "").trim();
@@ -57,7 +57,7 @@ export async function playCollection(col: CollectionSummary | CollectionDetails,
                 tracks: details.tracks,
                 createdAt: 0,
                 isProtected: true,
-                thumbnail: updateThumbnailUrl(details.thumbnails[0]?.url),
+                thumbnail: bestThumbnailUrl(details.thumbnails),
             },
             startIdx,
         );
@@ -93,7 +93,7 @@ export async function saveCollectionToLibrary(col: CollectionSummary | Collectio
         if (toast !== null) toasts.dismiss(toast);
         const playlist = await libraryState.createPlaylist(details.title);
         if (!playlist) return null;
-        const cover = updateThumbnailUrl(details.thumbnails.at(-1)?.url ?? details.thumbnails[0]?.url);
+        const cover = bestThumbnailUrl(details.thumbnails);
         if (cover) await libraryState.saveThumbnail(playlist.id, cover).catch(() => {});
         await libraryState.addTracksToPlaylist(playlist.id, details.tracks);
         return playlist;

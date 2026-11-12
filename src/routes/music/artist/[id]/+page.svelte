@@ -24,7 +24,7 @@
         saveCollectionToLibrary,
     } from "$lib/actions";
     import { splitArtistCredits } from "$lib/music-metadata";
-    import { updateThumbnailUrl } from "$lib/utils";
+     import { bestThumbnailUrl } from "$lib/utils";
     import { tilt } from "$lib/tilt";
     import { isAndroid } from "$lib/platform";
     import type { ArtistDetails, CollectionSummary, Playlist, Song } from "$lib/schema";
@@ -131,7 +131,7 @@
         tracks: baseSongs,
         createdAt: 0,
         isProtected: true,
-        thumbnail: updateThumbnailUrl(artist?.thumbnails.at(-1)?.url ?? artist?.thumbnails[0]?.url),
+         thumbnail: bestThumbnailUrl(artist?.thumbnails),
     });
 
     function playAll(start = 0) {
@@ -174,7 +174,7 @@
         if (!baseSongs.length) return;
         const pl = await libraryState.createPlaylist(`${displayName} · Top Songs`);
         if (!pl) return;
-        const cover = updateThumbnailUrl(artist?.thumbnails.at(-1)?.url ?? artist?.thumbnails[0]?.url);
+         const cover = bestThumbnailUrl(artist?.thumbnails);
         if (cover) await libraryState.saveThumbnail(pl.id, cover).catch(() => {});
         await libraryState.addTracksToPlaylist(pl.id, baseSongs);
     }
