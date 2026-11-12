@@ -13,7 +13,9 @@
     let qrTooLarge = $state(false);
     let camera = $state<MediaStream | null>(null);
     let video = $state<HTMLVideoElement>();
-    let scanFrame = 0;
+    let openingCamera = $state(false);
+    let joining = $state(false);
+    let cameraRequest = 0;
     let query = $state('');
     let results = $state<Song[]>([]);
     const guest = $derived(peers.links.find((link) => !link.host && link.connected && link.mode !== 'backup'));
@@ -23,13 +25,15 @@
         let cancelled = false;
         qr = '';
         qrTooLarge = false;
-        if (pairing) void QRCode.toDataURL(pairing, { errorCorrectionLevel: 'L', scale: 6 })
+        if (pairing) void QRCode.toDataURL(pairing, { errorCorrectionLevel: 'M', scale: 6, margin: 5 })
+            .catch(() => QRCode.toDataURL(pairing, { errorCorrectionLevel: 'L', scale: 6, margin: 5 }))
             .then((value) => { if (!cancelled) qr = value; }).catch(() => { if (!cancelled) qrTooLarge = true; });
         return () => { cancelled = true; };
     });
 
     function stopCamera() {
-        cancelAnimationFrame(scanFrame);
+        cameraRequest++;
+        openingCamera = false;
         camera?.getTracks().forEach((track) => track.stop());
         camera = null;
     }
@@ -42,28 +46,66 @@
     }
 
     async function useCode(value: string) {
-        await peers.join(value);
-        code = '';
+        if (joining || !value.trim()) return;
+        joining = true;
+        stopCamera();
+        try {
+            await peers.join(value.replace(/\s/g, ''));
+            code = '';
+        } finally { joining = false; }
+    }
+
+    function invite(mode: 'backup' | 'remote' | 'party') {
+        stopCamera();
+        return run(() => peers.invite(mode, includeAudio));
     }
 
     async function scan() {
-        camera = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' }, audio: false });
+        const request = ++cameraRequest;
+        openingCamera = true;
+        try {
+            const stream = await navigator.mediaDevices.getUserMedia({
+                video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } },
+                audio: false,
+            });
+            if (request === cameraRequest) camera = stream;
+            else stream.getTracks().forEach((track) => track.stop());
+        } catch (error) {
+            if (request === cameraRequest) throw error;
+        } finally {
+            if (request === cameraRequest) openingCamera = false;
+        }
+    }
+
+    function readQr(ctx: CanvasRenderingContext2D, source: CanvasImageSource,
+        width: number, height: number, crop: number, resolution: number) {
+        const square = Math.round(Math.min(width, height) * crop);
+        const w = crop ? square : width;
+        const h = crop ? square : height;
+        const scale = Math.min(1, resolution / Math.max(w, h));
+        const outWidth = Math.max(1, Math.round(w * scale));
+        const outHeight = Math.max(1, Math.round(h * scale));
+        const canvas = ctx.canvas;
+        if (canvas.width !== outWidth || canvas.height !== outHeight) {
+            canvas.width = outWidth;
+            canvas.height = outHeight;
+        }
+        ctx.drawImage(source, (width - w) / 2, (height - h) / 2, w, h, 0, 0, outWidth, outHeight);
+        const { data } = ctx.getImageData(0, 0, outWidth, outHeight);
+        const match = jsQR(data, outWidth, outHeight, { inversionAttempts: 'dontInvert' });
+        return match?.data.startsWith('zeta-peer:') ? match.data : undefined;
     }
 
     async function scanImage(file: File) {
         const image = await createImageBitmap(file);
         try {
-            const canvas = document.createElement('canvas');
-            const scale = Math.min(1, 1600 / Math.max(image.width, image.height));
-            canvas.width = Math.round(image.width * scale);
-            canvas.height = Math.round(image.height * scale);
-            const ctx = canvas.getContext('2d');
+            const ctx = document.createElement('canvas').getContext('2d', { willReadFrequently: true });
             if (!ctx) throw new Error('Could not read this image.');
-            ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
-            const { data, width, height } = ctx.getImageData(0, 0, canvas.width, canvas.height);
-            const code = jsQR(data, width, height)?.data;
-            if (!code?.startsWith('zeta-peer:')) throw new Error('No Zeta pairing QR found in this image.');
-            await useCode(code);
+            const match = readQr(ctx, image, image.width, image.height, 0, 1600)
+                ?? readQr(ctx, image, image.width, image.height, 0.82, 1200)
+                ?? readQr(ctx, image, image.width, image.height, 0, 1000);
+            if (!match) throw new Error('No Zeta pairing QR found in this image.');
+            await useCode(match);
         } finally { image.close(); }
     }
 
@@ -72,32 +114,30 @@
         const element = video;
         if (!stream || !element) return;
         element.srcObject = stream;
-        const canvas = document.createElement('canvas');
-        const ctx = canvas.getContext('2d', { willReadFrequently: true });
+        const ctx = document.createElement('canvas').getContext('2d', { willReadFrequently: true });
+        if (!ctx) return;
+        let frameId: number;
         let last = 0;
+        let attempt = 0;
+        // Try native detail in the center as well as the full frame at two scales.
+        const views = [[0.8, 1200], [0, 1280], [0, 900], [0.6, 960]];
         function frame(now: number) {
-            if (ctx && element && element.videoWidth && now - last >= 150) {
+            if (element && ctx && element.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA && now - last >= 150) {
                 last = now;
-                // Keep small QR modules intact in the camera preview.
-                const width = Math.min(element.videoWidth, 1280);
-                const height = Math.round(width * element.videoHeight / element.videoWidth);
-                if (canvas.width !== width || canvas.height !== height) {
-                    canvas.width = width;
-                    canvas.height = height;
-                }
-                ctx.drawImage(element, 0, 0, canvas.width, canvas.height);
-                const pixels = ctx.getImageData(0, 0, canvas.width, canvas.height);
-                const match = jsQR(pixels.data, pixels.width, pixels.height);
-                if (match?.data.startsWith('zeta-peer:')) {
-                    stopCamera();
-                    void run(() => useCode(match.data));
+                const [crop, resolution] = views[attempt++ % views.length];
+                const match = readQr(ctx, element, element.videoWidth, element.videoHeight, crop, resolution);
+                if (match) {
+                    void run(() => useCode(match));
                     return;
                 }
             }
-            scanFrame = requestAnimationFrame(frame);
+            frameId = requestAnimationFrame(frame);
         }
-        scanFrame = requestAnimationFrame(frame);
-        return () => cancelAnimationFrame(scanFrame);
+        frameId = requestAnimationFrame(frame);
+        return () => {
+            cancelAnimationFrame(frameId);
+            element.srcObject = null;
+        };
     });
 
     async function search() {
@@ -109,9 +149,9 @@
     <h2>Nearby devices</h2>
     <p class="muted">Use the same local network. Scan the invitation once or paste its code.</p>
     <div class="buttons">
-        <button class="btn" disabled={!!peers.pending || peers.busy} onclick={() => run(() => peers.invite('backup', includeAudio))}>Send Zeta backup by QR</button>
-        <button class="btn" disabled={!!peers.pending || peers.busy} onclick={() => run(() => peers.invite('remote'))}>Pair remote control</button>
-        <button class="btn" disabled={!!peers.pending || peers.busy} onclick={() => run(() => peers.invite('party'))}>Invite to play together</button>
+        <button class="btn" disabled={!!peers.pending || peers.busy || joining} onclick={() => invite('backup')}>Send Zeta backup by QR</button>
+        <button class="btn" disabled={!!peers.pending || peers.busy || joining} onclick={() => invite('remote')}>Pair remote control</button>
+        <button class="btn" disabled={!!peers.pending || peers.busy || joining} onclick={() => invite('party')}>Invite to play together</button>
     </div>
     {#if peers.pending}
         <p role="status">{peers.pending.host ? 'Scan this invitation on the other device.' : 'Connecting to the host…'}</p>
@@ -124,12 +164,19 @@
             <button class="btn" onclick={() => peers.disconnect(peers.pending!.id)}>Cancel pairing</button>
         </div>
     {/if}
-    {#if !peers.pending}
-        <label for="peer-code">Invitation code</label>
-        <textarea id="peer-code" bind:value={code} rows="2"></textarea>
+    {#if !peers.pending && !joining}
+        <form class="invitation" onsubmit={(event) => { event.preventDefault(); void run(() => useCode(code)); }}>
+            <label for="peer-code">Invitation code</label>
+            <div class="code-row">
+                <input class="input" id="peer-code" type="text" bind:value={code} placeholder="Paste invitation code"
+                    spellcheck={false} autocomplete="off" autocapitalize="off" />
+                <button class="btn" type="submit" disabled={!code.trim() || peers.busy}>Join</button>
+            </div>
+        </form>
         <div class="buttons">
-            <button class="btn" disabled={!code.trim() || peers.busy} onclick={() => run(() => useCode(code))}>Use code</button>
-            <button class="btn" onclick={() => camera ? stopCamera() : run(scan)}>{camera ? 'Close camera' : 'Scan QR'}</button>
+            <button class="btn" onclick={() => camera || openingCamera ? stopCamera() : run(scan)}>
+                {camera ? 'Close camera' : openingCamera ? 'Cancel camera' : 'Scan QR'}
+            </button>
             <label class="btn qr-image">
                 Open QR image
                 <input type="file" accept="image/*" aria-label="Open QR image" onchange={(event) => {
@@ -139,8 +186,16 @@
                 }} />
             </label>
         </div>
+    {:else if joining && !peers.pending}
+        <p role="status">Connecting to the host…</p>
     {/if}
-    {#if camera}<video bind:this={video} autoplay muted playsinline aria-label="QR scanner"></video>{/if}
+    {#if camera}
+        <div class="scanner">
+            <video bind:this={video} autoplay muted playsinline aria-label="QR scanner"></video>
+            <div class="viewfinder" aria-hidden="true"></div>
+        </div>
+        <p class="muted">Fit the whole QR code inside the frame and hold steady.</p>
+    {/if}
     {#if peers.progress !== null}<progress aria-label="Backup transfer" value={peers.progress} max="1"></progress>{/if}
     {#each peers.links.filter((link) => link.connected) as link (link.id)}
         <div class="buttons">
@@ -183,8 +238,36 @@
 <style>
     .peer { display: grid; gap: 12px; padding: 18px; }
     .buttons { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
-    textarea { width: 100%; background: var(--surface-2); color: inherit; padding: 8px; }
-    img, video { width: min(100%, 380px); border-radius: 8px; }
+    .invitation { display: grid; gap: 6px; min-width: 0; }
+    .invitation label { color: var(--text-2); font-weight: 650; }
+    .code-row { display: flex; align-items: center; gap: 8px; }
+    .code-row .input { flex: 1; min-width: 0; }
+    img {
+        width: min(100%, 440px);
+        border-radius: var(--r-sm);
+        image-rendering: pixelated;
+    }
+    .scanner {
+        position: relative;
+        display: grid;
+        place-items: center;
+        width: min(100%, 440px);
+        aspect-ratio: 4 / 3;
+        overflow: hidden;
+        border-radius: var(--r-md);
+        background: var(--bg);
+    }
+    video { width: 100%; height: 100%; object-fit: cover; }
+    .viewfinder {
+        position: absolute;
+        height: 78%;
+        max-width: 85%;
+        aspect-ratio: 1;
+        border: 2px solid white;
+        border-radius: var(--r-sm);
+        box-shadow: 0 0 0 50vmax rgb(0 0 0 / 0.36);
+        pointer-events: none;
+    }
     .qr-image { position: relative; }
     .qr-image input { position: absolute; inset: 0; width: 100%; opacity: 0; cursor: pointer; }
     .qr-image:focus-within { outline: 2px solid currentColor; }

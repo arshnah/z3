@@ -22,11 +22,13 @@ import com.google.common.util.concurrent.SettableFuture;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 
 @CapacitorPlugin(name = "ZetaPlayer")
 public class ZetaPlayerPlugin extends Plugin {
     private static volatile ZetaPlayerPlugin onlineBridge;
+    private static final AtomicReference<String> pendingWidgetCommand = new AtomicReference<>();
     private final ConcurrentHashMap<String, SettableFuture<String>> onlineRequests = new ConcurrentHashMap<>();
     private ListenableFuture<MediaController> connecting;
     private MediaController controller;
@@ -71,11 +73,29 @@ public class ZetaPlayerPlugin extends Plugin {
 
     static boolean widgetNavigation(String command) {
         ZetaPlayerPlugin plugin = onlineBridge;
-        if (plugin == null || !plugin.onlineBridgeReady) return false;
+        if (plugin == null || !plugin.hasListeners("widgetCommand")) return false;
+        plugin.emitWidgetCommand(command);
+        return true;
+    }
+
+    static void queueWidgetCommand(String command) {
+        String action = "toggle".equals(command) ? "resume" : command;
+        ZetaPlayerPlugin plugin = onlineBridge;
+        if (plugin != null && plugin.hasListeners("widgetCommand")) plugin.emitWidgetCommand(action);
+        else pendingWidgetCommand.set(action);
+    }
+
+    @PluginMethod public void takeWidgetCommand(PluginCall call) {
+        String command = pendingWidgetCommand.getAndSet(null);
+        var result = new JSObject();
+        if (command != null) result.put("command", command);
+        call.resolve(result);
+    }
+
+    private void emitWidgetCommand(String command) {
         var data = new JSObject();
         data.put("command", command);
-        plugin.notifyListeners("widgetCommand", data);
-        return true;
+        notifyListeners("widgetCommand", data);
     }
 
     static ListenableFuture<String> requestOnline(String event, JSObject payload) {

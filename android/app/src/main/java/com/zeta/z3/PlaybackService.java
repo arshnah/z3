@@ -1,6 +1,7 @@
 package com.zeta.z3;
 
 import android.app.PendingIntent;
+import android.content.ComponentName;
 import android.content.Intent;
 import android.net.Uri;
 import android.util.Log;
@@ -10,6 +11,7 @@ import androidx.media3.common.AudioAttributes;
 import androidx.media3.common.C;
 import androidx.media3.common.MediaItem;
 import androidx.media3.common.MediaMetadata;
+import androidx.media3.common.Player;
 import androidx.media3.common.util.UnstableApi;
 import androidx.media3.datasource.DefaultDataSource;
 import androidx.media3.datasource.DefaultHttpDataSource;
@@ -201,7 +203,8 @@ public class PlaybackService extends MediaLibraryService {
             }
 
             @Override public void onMediaMetadataChanged(MediaMetadata metadata) { updateWidget(); }
-            @Override public void onIsPlayingChanged(boolean playing) { updateWidget(); }
+            @Override public void onPlayWhenReadyChanged(boolean playing, int reason) { updateWidget(); }
+            @Override public void onPlaybackStateChanged(int state) { updateWidget(); }
             @Override public void onMediaItemTransition(MediaItem item, int reason) { updateWidget(); }
         });
         sessionId = player.getAudioSessionId();
@@ -240,20 +243,35 @@ public class PlaybackService extends MediaLibraryService {
         ZetaPlaybackWidget.refresh(this, session == null ? null : session.getPlayer());
     }
 
-    void widgetAction(String action) {
-        if (session == null) return;
+    boolean widgetAction(String action) {
+        if (session == null) return false;
         var player = session.getPlayer();
-        if (player.getCurrentMediaItem() == null) return;
+        if (player.getCurrentMediaItem() == null) return false;
         if ("toggle".equals(action)) {
-            if (player.getPlayWhenReady()) player.pause(); else player.play();
+            if (player.getPlayWhenReady() && player.getPlaybackState() != Player.STATE_ENDED) player.pause();
+            else {
+                if (player.getPlaybackState() == Player.STATE_ENDED) player.seekToDefaultPosition();
+                if (player.getPlaybackState() == Player.STATE_IDLE) player.prepare();
+                player.play();
+            }
         } else if ("previous".equals(action) || "next".equals(action)) {
-            if (player.getMediaItemCount() <= 1 && ZetaPlayerPlugin.widgetNavigation(action)) return;
+            if (player.getMediaItemCount() <= 1) {
+                if (ZetaPlayerPlugin.widgetNavigation(action)) return true;
+                if ("next".equals(action)) return false;
+            }
             if ("previous".equals(action)) player.seekToPrevious(); else player.seekToNext();
-        }
+        } else return false;
+        return true;
     }
 
     @Override
     public MediaLibrarySession onGetSession(MediaSession.ControllerInfo controllerInfo) { return session; }
+
+    @Override public void onTaskRemoved(Intent rootIntent) {
+        // A widget tap briefly creates its own task. Finishing it is not a dismissal of the player.
+        if (rootIntent != null && new ComponentName(this, ZetaWidgetActionActivity.class).equals(rootIntent.getComponent())) return;
+        super.onTaskRemoved(rootIntent);
+    }
 
     private ListenableFuture<MediaItem> resolveSearch(String query) {
         return Futures.transformAsync(searchOnline(query), songs -> {

@@ -13,6 +13,7 @@
         setAudioEffects(options: { bands: number[]; leveling: boolean }): Promise<void>;
         setVolume(options: { volume: number }): Promise<void>;
         clear(): Promise<void>;
+        takeWidgetCommand(): Promise<{ command?: string }>;
         setKeepAwake(options: { enabled: boolean }): Promise<void>;
         addListener(name: 'widgetCommand', callback: (event: { command: string }) => void): Promise<PluginListenerHandle>;
         addListener(name: 'state', callback: (state: NativeState) => void): Promise<PluginListenerHandle>;
@@ -38,14 +39,17 @@
     let sourceRevision: string;
     let pendingSource = false;
     let requestedPaused = true;
+    let widgetCommand = $state<string>();
 
     onMount(() => {
         let disposed = false;
         const handles: PluginListenerHandle[] = [];
         void Promise.all([
             native.addListener('widgetCommand', ({ command }) => {
-                if (command === 'next') nextTrack();
-                else if (command === 'previous') previousTrack();
+                if (!track) return;
+                if (uri && command === 'next') nextTrack();
+                else if (uri && command === 'previous') previousTrack();
+                else widgetCommand = command;
             }),
             native.addListener('state', (state) => {
                 if (state.id !== track?.id || !uri || uri !== loadedUri || state.revision !== revision) return;
@@ -69,7 +73,12 @@
         ]).then((listeners) => {
             handles.push(...listeners);
             if (disposed) handles.forEach((handle) => void handle.remove());
-            else ready = true;
+            else {
+                ready = true;
+                void native.takeWidgetCommand().then(({ command }) => {
+                    if (!disposed && track && command) widgetCommand = command;
+                }).catch(() => {});
+            }
         }).catch(onerror);
         return () => {
             disposed = true;
@@ -77,6 +86,17 @@
             void native.clear().catch(() => {});
             void native.setKeepAwake({ enabled: false }).catch(() => {});
         };
+    });
+
+    $effect(() => {
+        if (!ready || !uri || !widgetCommand) return;
+        const command = widgetCommand;
+        widgetCommand = undefined;
+        untrack(() => {
+            if (command === 'resume') paused = false;
+            else if (command === 'next') nextTrack();
+            else if (command === 'previous') previousTrack();
+        });
     });
 
     $effect(() => {

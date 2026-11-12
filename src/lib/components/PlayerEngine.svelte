@@ -160,6 +160,7 @@
     /* ------------------------------ loading ------------------------------- */
 
     let failCount = 0;
+    let streamTrackId = $state<string>();
 
     function handlePlaybackFailure(track: Song, err: unknown) {
         if (playerState.currentTrack?.id !== track.id) return;
@@ -212,6 +213,7 @@
             const done = () => {
                 if (stale || playerState.currentTrack?.id !== loadingId) return;
                 applyCache(cache.get(loadingId));
+                streamTrackId = loadingId;
                 failCount = 0;
                 if (restoreAt !== null) playerState.paused = true;
             };
@@ -608,7 +610,7 @@
 
 {#if isAndroid}
 <AndroidPlayer
-    uri={playerState.stream?.nativeUri}
+    uri={streamTrackId === playerState.currentTrack?.id ? playerState.stream?.nativeUri : undefined}
     track={playerState.currentTrack}
     bind:paused={playerState.paused}
     bind:currentTime={playerState.currentTime}

@@ -403,8 +403,14 @@
 
     {/if}
 
-    <section class="group"><AudioEffects /></section>
-    <section class="group"><LibraryMaintenance bind:showDuplicates /></section>
+    <section class="group">
+        <h2><Icon name="sliders-horizontal" /> Sound</h2>
+        <AudioEffects />
+    </section>
+    <section class="group">
+        <h2><Icon name="library" /> Library maintenance</h2>
+        <LibraryMaintenance bind:showDuplicates />
+    </section>
     <section class="group"><PeerSettings includeAudio={includeBackupAudio} /></section>
 
     <section class="group">
