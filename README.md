@@ -13,9 +13,9 @@ npm run dev
 
 `npm run build` builds the Electron app and `npm run dist` packages it.
 
-If the built-in YouTube player request fails, Zeta retries playback and downloads with [yt-dlp](https://github.com/yt-dlp/yt-dlp/wiki/Installation) when it is available on the app's PATH. Use a current version with its [YouTube challenge scripts and a supported JavaScript runtime](https://github.com/yt-dlp/yt-dlp/wiki/EJS). Zeta enables Node.js 22+ in addition to yt-dlp's default Deno runtime. Restart Zeta after changing PATH.
+If the built-in YouTube player request fails, Zeta retries playback and downloads with [yt-dlp](https://github.com/yt-dlp/yt-dlp/wiki/Installation). Zeta looks on PATH and in common install locations, including `~/.local/bin`, Homebrew, WinGet, Scoop, and Chocolatey. Use a current version with its [YouTube challenge scripts and a supported JavaScript runtime](https://github.com/yt-dlp/yt-dlp/wiki/EJS). Zeta enables Node.js 22+ in addition to yt-dlp's default Deno runtime. Restart Zeta after changing PATH.
 
-For videos that require signing in, choose a signed-in browser profile under **Settings → YouTube → Use browser cookies**. Zeta remembers the profile and asks yt-dlp to read its current cookies when needed. If the browser’s cookie store is locked or yt-dlp cannot read it, you can also select a [Netscape-format YouTube cookies export](https://github.com/yt-dlp/yt-dlp/wiki/Extractors#exporting-youtube-cookies). **Clear cookie source** removes the selection.
+To use your YouTube session for playback and downloads, choose a signed-in browser profile under **Settings → YouTube → Use browser cookies**. Zeta remembers the profile and asks yt-dlp to read its current cookies for each new YouTube audio request. If the browser’s cookie store is locked or yt-dlp cannot read it, you can also select a [Netscape-format YouTube cookies export](https://github.com/yt-dlp/yt-dlp/wiki/Extractors#exporting-youtube-cookies). **Clear cookie source** returns to built-in playback with yt-dlp as a fallback.
 
 Desktop includes music search and discovery, playlists, favourites, queue-based
 autoplay and radio, lyrics, visualizers, and a video mode for matching music

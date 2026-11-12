@@ -331,18 +331,19 @@ async function webStreamToBuffer(stream: ReadableStream<Uint8Array>): Promise<Bu
 }
 
 async function fetchYoutubeAudio(videoId: string, quality: AudioQuality): Promise<Buffer> {
+    const { youtubeCookiesFile, youtubeBrowserProfileId } = getConfig();
+    if (youtubeBrowserProfileId) {
+        const profile = (await findBrowserProfiles()).find(({ id }) => id === youtubeBrowserProfileId);
+        if (!profile) throw new Error('The selected browser profile is unavailable. Choose a profile or cookies file in Settings.');
+        return downloadWithYtDlp(videoId, quality, { cookiesFile: null, browserProfile: profile.ytDlpSource });
+    }
+    if (youtubeCookiesFile) return downloadWithYtDlp(videoId, quality, { cookiesFile: youtubeCookiesFile });
+
     try {
         await init();
         return await webStreamToBuffer(await downloadYtAudio(videoId, quality));
     } catch {
-        const { youtubeCookiesFile, youtubeBrowserProfileId } = getConfig();
-        const profile = youtubeBrowserProfileId
-            ? (await findBrowserProfiles()).find(({ id }) => id === youtubeBrowserProfileId)
-            : undefined;
-        if (youtubeBrowserProfileId && !profile) {
-            throw new Error('The selected browser profile is unavailable. Choose a profile or cookies file in Settings.');
-        }
-        return downloadWithYtDlp(videoId, quality, { cookiesFile: youtubeCookiesFile, browserProfile: profile?.ytDlpSource });
+        return downloadWithYtDlp(videoId, quality, { cookiesFile: null });
     }
 }
 

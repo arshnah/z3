@@ -1,12 +1,34 @@
 import { execFile } from 'node:child_process';
 import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { isAbsolute, join } from 'node:path';
+import { homedir, tmpdir } from 'node:os';
+import { delimiter, isAbsolute, join } from 'node:path';
 import { promisify } from 'node:util';
 import { MAX_BITRATE_KBPS, type AudioQuality } from '../../src/lib/audio-quality.ts';
 
 const execFileAsync = promisify(execFile);
 const MAX_COOKIE_FILE_BYTES = 1024 * 1024;
+
+function downloaderEnvironment(): NodeJS.ProcessEnv {
+    const env = { ...process.env };
+    const home = homedir();
+    const windows = process.platform === 'win32';
+    const pathKey = windows ? Object.keys(env).find((key) => key.toLowerCase() === 'path') ?? 'Path' : 'PATH';
+    // GUI launches can miss the directories that the user's shell adds to PATH.
+    const userBins = windows ? [
+        join(env.LOCALAPPDATA || join(home, 'AppData', 'Local'), 'Microsoft', 'WinGet', 'Links'),
+        join(env.SCOOP || join(home, 'scoop'), 'shims'),
+    ] : [join(home, '.local', 'bin')];
+    const systemBins = windows ? [
+        join(env.ChocolateyInstall || join(env.ProgramData || 'C:\\ProgramData', 'chocolatey'), 'bin'),
+        join(env.SystemRoot || 'C:\\Windows', 'System32'),
+    ] : ['/opt/homebrew/bin', '/usr/local/bin', '/usr/bin', '/bin'];
+    const inherited = (env[pathKey] ?? '').split(delimiter);
+    const missingUserBins = userBins.filter((bin) => !inherited.some((entry) =>
+        windows ? entry.toLowerCase() === bin.toLowerCase() : entry === bin,
+    ));
+    env[pathKey] = [...new Set([...missingUserBins, ...inherited, ...systemBins].filter(isAbsolute))].join(delimiter);
+    return env;
+}
 
 export async function readYoutubeCookies(path: string): Promise<string> {
     let contents: string;
@@ -61,15 +83,16 @@ export async function downloadWithYtDlp(
         }
 
         args.push('--', `https://www.youtube.com/watch?v=${videoId}`);
-        const { stdout } = await execFileAsync('yt-dlp', args, {
+        const { stdout } = await execFileAsync(process.platform === 'win32' ? 'yt-dlp.exe' : 'yt-dlp', args, {
             cwd: temp,
+            env: downloaderEnvironment(),
             encoding: 'buffer',
             maxBuffer: 128 * 1024 * 1024,
             timeout: 90_000,
             windowsHide: true,
         }).catch((error: NodeJS.ErrnoException & { stderr?: Buffer; killed?: boolean }) => {
             if (error.code === 'ENOENT') {
-                throw new Error('YouTube playback failed. Install yt-dlp on PATH to enable the desktop fallback.');
+                throw new Error('Zeta could not find yt-dlp. Install it in a standard location or add it to your PATH, then reopen Zeta.');
             }
             if (error.killed) throw new Error('The YouTube download via yt-dlp timed out.');
             const stderr = error.stderr?.toString() ?? '';

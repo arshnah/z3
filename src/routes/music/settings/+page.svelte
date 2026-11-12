@@ -182,8 +182,7 @@
     <section class="group">
         <h2><Icon name="play" /> YouTube</h2>
         <div class="card block">
-            <p class="muted">If built-in YouTube playback fails, Zeta can retry using yt-dlp installed on your PATH.</p>
-            <p class="muted">For videos that require sign-in, choose the browser profile where you’re signed in to YouTube.</p>
+            <p class="muted">Select a signed-in browser profile or cookies file to use with yt-dlp for YouTube playback and downloads.</p>
             <div class="btn-row">
                 <select class="input" aria-label="YouTube browser profile" bind:value={selectedBrowserProfile}
                     disabled={loadingBrowserProfiles || !browserProfiles.length || settingsState.updatingYoutubeCookies}>
