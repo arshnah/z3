@@ -78,3 +78,21 @@ test('listening history filters artist, title, and exclusive end dates', async (
     assert.equal(matchesListeningFilter({ timestamp: 101 }, name, { query: 'example', from: 100, until: 101 }), false);
     assert.equal(matchesListeningFilter({ timestamp: 100 }, name, { query: 'another' }), false);
 });
+
+test('playlist covers survive a normal backup and are dropped if they would block a large export', async () => {
+    const cover = 'data:image/jpeg;base64,AQID';
+    const playlist = { ...manifest.playlists[0], thumbnail: cover };
+    const small = await makeZetaBackup({ ...manifest, playlists: [playlist] }, async () => undefined, false);
+    assert.equal((await openZetaBackup(small)).manifest.playlists[0].thumbnail, cover);
+
+    const largeCover = 'data:image/jpeg;base64,' + 'A'.repeat(1024 * 1024);
+    const playlists = Array.from({ length: 17 }, (_, index) => ({
+        ...playlist, id: `playlist-${index}.m3u8`, thumbnail: largeCover,
+    }));
+    const large = await makeZetaBackup({ ...manifest, playlists }, async () => undefined, false);
+    const restored = (await openZetaBackup(large)).manifest;
+    assert.equal(restored.playlists.length, playlists.length);
+    assert.ok(restored.playlists.every(({ thumbnail }) => thumbnail === undefined));
+    assert.deepEqual(restored.playlists[0].trackIds, playlist.trackIds);
+    assert.deepEqual(restored.events, manifest.events);
+});

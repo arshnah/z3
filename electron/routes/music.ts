@@ -371,6 +371,8 @@ async function resolveCover(
         candidates.push(`https://i.ytimg.com/vi/${ytVideoId}/maxresdefault.jpg`);
         candidates.push(`https://i.ytimg.com/vi/${ytVideoId}/hqdefault.jpg`);
     }
+    // updateThumbnailUrl now rewrites googleusercontent render params to the
+    // largest available cover, so provider URLs land here full-size already.
     const best = pickBestThumbnail(thumbnails);
     if (best?.url) candidates.push(updateThumbnailUrl(best.url));
     for (const t of thumbnails || []) if (t.url) candidates.push(updateThumbnailUrl(t.url));

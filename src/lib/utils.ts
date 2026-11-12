@@ -357,12 +357,35 @@ export function debounce<T extends (...args: any[]) => any>(
     };
 }
 
+/**
+ * Rewrite provider image URLs so they serve the largest available cover.
+ * Google/YouTube image servers render on demand (`...=w120-h120-l90-rj` is a
+ * 120px JPEG): ask for 1200px and they cap at the image's native size, so this
+ * never loses quality. The JPEG render flag (`rj`) is preserved when present.
+ */
 export function updateThumbnailUrl(url?: string): string {
-    // e.g. https://yt3.googleusercontent.com/DoelpD8M14QV2ffMecjMcGQyJO9xjb-j0clL6Rfz7QQMF4JrqLf6nFzx3i7Y1J-EWjZEnYdjzZABMWEo=w120-h120-l90-rj
     if (!url) return '';
-    if (url.includes('yt3.googleusercontent.com')) return url.replace('w120', 'w512').replace('h120', 'h512'); // hacky!
-    else if (url.includes('c.saavncdn.com')) return url.replace('50x50', '500x500');
-    else return url;
+    if (/^https?:\/\/\w*\.?googleusercontent\.com\//i.test(url)) {
+        const m = url.match(/=([a-z]\d+[^=]*)$/i);
+        if (m) {
+            const jpeg = /(^|-)rj($|-)/i.test(m[1]) ? '-rj' : '';
+            return url.replace(/=[a-z]\d+[^=]*$/i, `=w1200-h1200${jpeg}`);
+        }
+        return url;
+    }
+    if (url.includes('c.saavncdn.com')) {
+        // Saavn bakes the size into the file name: -08x08-50x50.jpg -> -500x500.jpg
+        return url.replace(/\d{2,3}x\d{2,3}\.jpe?g$/i, '500x500.jpg');
+    }
+    return url;
+}
+
+/** URL of the largest thumbnail, upgraded to its big variant. '' when none. */
+export function bestThumbnailUrl(thumbnails?: Thumbnail[]): string {
+    const candidates = (thumbnails ?? []).filter((t) => t.url);
+    if (!candidates.length) return '';
+    const byArea = (t: Thumbnail) => (t.width ?? t.height ?? 0) * (t.height ?? t.width ?? 1);
+    return updateThumbnailUrl(candidates.toSorted((a, b) => byArea(a) - byArea(b)).at(-1)!.url!);
 }
 
 // Cache object URLs so repeated reactive reads of the same thumbnail don't

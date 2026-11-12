@@ -65,8 +65,11 @@ export function mergeBackupEvents(existing: BackupEvent[], incoming: BackupEvent
     });
 }
 
-export function backupImage(url?: string): string | undefined {
-    return typeof url === 'string' && /^https:\/\//i.test(url) ? url : undefined;
+export function backupImage(url?: string, includeEmbedded = true): string | undefined {
+    if (typeof url !== 'string') return undefined;
+    if (/^https:\/\//i.test(url)) return url;
+    if (includeEmbedded && /^data:image\/(?:jpeg|png|webp|gif|avif);base64,[a-z0-9+/]+=*$/i.test(url)) return url;
+    return undefined;
 }
 
 function text(value: unknown): string {
@@ -77,7 +80,7 @@ function cleanThumbnails(value: unknown, embedded: boolean): Thumbnail[] {
     if (!Array.isArray(value)) return [];
     return value.flatMap((thumb: Thumbnail | null) => {
         if (!thumb) return [];
-        const url = backupImage(thumb.url);
+        const url = backupImage(thumb.url, embedded);
         const data = embedded && thumb.data instanceof Uint8Array && thumb.data.length ? thumb.data : undefined;
         if (!url && !data) return [];
         const mimetype = /^image\/(?:jpeg|png|webp|gif|avif)$/i.test(thumb.mimetype ?? '') ? thumb.mimetype : 'image/jpeg';
@@ -181,10 +184,17 @@ export async function makeZetaBackup(
         }
         songs.push({ song: cleanSong(entry.song, includeArtwork), audio });
     }
-    const encodeManifest = (entries: BackupSong[]) => encode({ version: 1, ...data, songs: entries }, { ignoreUndefined: true });
-    let manifest = encodeManifest(songs);
-    if (includeArtwork && (manifest.length > MAX_MANIFEST_BYTES || manifest.length + size > MAX_BACKUP_BYTES)) {
-        manifest = encodeManifest(songs.map(({ song, audio }) => ({ song: cleanSong(song, false), audio })));
+    const encodeManifest = (content: BackupManifest) => encode({ version: 1, ...content }, { ignoreUndefined: true });
+    let manifest = encodeManifest({ ...data, songs });
+    if (manifest.length > MAX_MANIFEST_BYTES || manifest.length + size > MAX_BACKUP_BYTES) {
+        manifest = encodeManifest({
+            ...data,
+            songs: songs.map(({ song, audio }) => ({ song: cleanSong(song, false), audio })),
+            playlists: data.playlists.map((list) => ({ ...list, thumbnail: backupImage(list.thumbnail, false) })),
+            names: data.names && Object.fromEntries(Object.entries(data.names).map(([id, name]) =>
+                [id, { ...name, thumbnailUrl: backupImage(name.thumbnailUrl, false) }],
+            )),
+        });
     }
     if (manifest.length > MAX_MANIFEST_BYTES) throw new Error('The library metadata exceeds the 16 MiB backup limit.');
     if (manifest.length + size > MAX_BACKUP_BYTES) throw new Error(BACKUP_AUDIO_LIMIT_MESSAGE);
