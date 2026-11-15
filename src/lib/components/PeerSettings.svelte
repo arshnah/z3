@@ -147,9 +147,14 @@
         if (query.trim()) results = (await client.musicSearch(query.trim(), 'yt')).slice(0, 10);
     }
 
+    // Both logs start with a zero-padded 24h timestamp, so a stable string
+    // sort interleaves them in the order they actually happened.
+    const diagnosticsText = $derived(
+        [...wayship.diagnostics, ...peers.diagnostics].sort().slice(-30).join('\n') || 'Waiting for a connection attempt…',
+    );
+
     async function copyDiagnostics() {
-        const text = [...wayship.diagnostics, ...peers.diagnostics].slice(-30).join('\n') || 'Waiting for a connection attempt…';
-        await navigator.clipboard.writeText(text);
+        await navigator.clipboard.writeText(diagnosticsText);
         diagnosticsCopied = true;
         setTimeout(() => { diagnosticsCopied = false; }, 1600);
     }
@@ -203,29 +208,29 @@
                     {/each}
                 </div>
             {:else}
-                    <p class="muted">No other Zeta devices are online on your Wayship account right now. Open Zeta and connect Wayship on another device, then it will appear here.</p>
+                <p class="muted">No other Zeta devices are online on your Wayship account right now. Open Zeta and connect Wayship on another device, then it will appear here.</p>
             {/if}
             <details class="diagnostics">
                 <summary>Wayship diagnostics</summary>
-                <pre>{[...wayship.diagnostics, ...peers.diagnostics].slice(-30).join('\n') || 'Waiting for a connection attempt…'}</pre>
+                <pre>{diagnosticsText}</pre>
                 <button class="btn" type="button" onclick={() => run(copyDiagnostics)}>{diagnosticsCopied ? 'Copied' : 'Copy diagnostics'}</button>
             </details>
         {:else}
             <details class="invitation">
                 <summary>Already have a Wayship token?</summary>
                 <form onsubmit={(e) => {
-                e.preventDefault();
-                void run(async () => {
-                    await wayship.useToken(wayshipTokenInput);
-                    wayshipTokenInput = '';
-                });
-            }}>
-                <label for="wayship-token">Or paste a Wayship app token (<code>wsa_…</code>)</label>
-                <div class="code-row">
-                    <input class="input" id="wayship-token" type="password" bind:value={wayshipTokenInput}
-                        placeholder="wsa_…" spellcheck={false} autocomplete="off" autocapitalize="off" />
-                    <button class="btn" type="submit" disabled={!wayshipTokenInput.trim()}>Save token</button>
-                </div>
+                    e.preventDefault();
+                    void run(async () => {
+                        await wayship.useToken(wayshipTokenInput);
+                        wayshipTokenInput = '';
+                    });
+                }}>
+                    <label for="wayship-token">Paste a Wayship app token (<code>wsa_…</code>)</label>
+                    <div class="code-row">
+                        <input class="input" id="wayship-token" type="password" bind:value={wayshipTokenInput}
+                            placeholder="wsa_…" spellcheck={false} autocomplete="off" autocapitalize="off" />
+                        <button class="btn" type="submit" disabled={!wayshipTokenInput.trim()}>Save token</button>
+                    </div>
                 </form>
             </details>
         {/if}
@@ -257,28 +262,28 @@
     {/if}
     {#if !peers.pending && !joining}
         <details class="invitation">
-        <summary>Use a QR code or invitation code</summary>
-        <form onsubmit={(event) => { event.preventDefault(); void run(() => useCode(code)); }}>
-            <label for="peer-code">Invitation code</label>
-            <div class="code-row">
-                <input class="input" id="peer-code" type="text" bind:value={code} placeholder="Paste invitation code"
-                    spellcheck={false} autocomplete="off" autocapitalize="off" />
-                <button class="btn" type="submit" disabled={!code.trim() || peers.busy}>Join</button>
+            <summary>Use a QR code or invitation code</summary>
+            <form onsubmit={(event) => { event.preventDefault(); void run(() => useCode(code)); }}>
+                <label for="peer-code">Invitation code</label>
+                <div class="code-row">
+                    <input class="input" id="peer-code" type="text" bind:value={code} placeholder="Paste invitation code"
+                        spellcheck={false} autocomplete="off" autocapitalize="off" />
+                    <button class="btn" type="submit" disabled={!code.trim() || peers.busy}>Join</button>
+                </div>
+            </form>
+            <div class="buttons">
+                <button class="btn" onclick={() => camera || openingCamera ? stopCamera() : run(scan)}>
+                    {camera ? 'Close camera' : openingCamera ? 'Cancel camera' : 'Scan QR'}
+                </button>
+                <label class="btn qr-image">
+                    Open QR image
+                    <input type="file" accept="image/*" aria-label="Open QR image" onchange={(event) => {
+                        const file = event.currentTarget.files?.[0];
+                        event.currentTarget.value = '';
+                        if (file) void run(() => scanImage(file));
+                    }} />
+                </label>
             </div>
-        </form>
-        <div class="buttons">
-            <button class="btn" onclick={() => camera || openingCamera ? stopCamera() : run(scan)}>
-                {camera ? 'Close camera' : openingCamera ? 'Cancel camera' : 'Scan QR'}
-            </button>
-            <label class="btn qr-image">
-                Open QR image
-                <input type="file" accept="image/*" aria-label="Open QR image" onchange={(event) => {
-                    const file = event.currentTarget.files?.[0];
-                    event.currentTarget.value = '';
-                    if (file) void run(() => scanImage(file));
-                }} />
-            </label>
-        </div>
         </details>
     {:else if joining && !peers.pending}
         <p role="status">Connecting to the host…</p>
@@ -293,14 +298,14 @@
     {#if peers.progress !== null}<progress aria-label="Backup transfer" value={peers.progress} max="1"></progress>{/if}
     {#each peers.links.filter((link) => link.connected) as link (link.id)}
         <div class="buttons">
-            <span>{link.mode === 'party' ? 'Listening party' : link.mode === 'backup' ? 'Backup transfer' : 'Remote control'}</span>
+            <span>{link.mode === 'party' ? 'Listening party' : link.mode === 'backup' ? 'Backup transfer' : 'Remote control'}{link.deviceName ? ` · ${link.deviceName}` : ''}</span>
             {#if link.mode === 'backup' && link.host}
                 <button class="btn" disabled={peers.progress !== null} onclick={() => run(() => peers.sendBackup(link.id))}>Send backup again</button>
             {:else}
                 <button class="btn" disabled={peers.progress !== null} onclick={() => run(() => peers.syncLibrary(link.id, true))}>Sync stats &amp; library</button>
                 {#if link.host && link.mode === 'remote'}
-                    <button class="btn" onclick={() => peers.takeoverGuest(link.id)}>Play on phone</button>
-                    <button class="btn" onclick={() => peers.playHere(link.id)}>Play on laptop</button>
+                    <button class="btn" onclick={() => peers.takeoverGuest(link.id)}>Play on {link.deviceName || 'other device'}</button>
+                    <button class="btn" onclick={() => peers.playHere(link.id)}>Play here</button>
                 {/if}
             {/if}
             <button class="btn" onclick={() => peers.disconnect(link.id)}>Disconnect</button>
@@ -361,7 +366,6 @@
     }
     .wayship-peers { display: grid; gap: 8px; }
     .diagnostics { margin-top: 2px; color: var(--text-2); }
-    .diagnostics summary { cursor: pointer; font-size: 12px; font-weight: 650; }
     .diagnostics pre {
         max-height: 220px;
         overflow: auto;
@@ -402,7 +406,44 @@
         margin: 4px 0;
     }
     .buttons { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
-    .invitation { display: grid; gap: 6px; min-width: 0; }
+    .invitation {
+        display: grid;
+        gap: 10px;
+        min-width: 0;
+        padding: 10px 12px;
+        border-radius: var(--r-md);
+        background: rgb(255 255 255 / 0.03);
+        border: 1px solid var(--border);
+    }
+    .invitation:not([open]) { gap: 0; }
+    .invitation summary,
+    .diagnostics summary {
+        cursor: pointer;
+        list-style: none;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        color: var(--text-2);
+        font-size: 12px;
+        font-weight: 650;
+    }
+    .invitation summary::-webkit-details-marker,
+    .diagnostics summary::-webkit-details-marker { display: none; }
+    .invitation summary::before,
+    .diagnostics summary::before {
+        content: "";
+        width: 6px;
+        height: 6px;
+        border-right: 1.5px solid currentColor;
+        border-bottom: 1.5px solid currentColor;
+        rotate: -45deg;
+        transition: rotate 0.2s var(--ease-out);
+    }
+    .invitation[open] summary::before,
+    .diagnostics[open] summary::before { rotate: 45deg; }
+    .invitation summary:hover,
+    .diagnostics summary:hover { color: var(--text); }
+    .invitation form { display: grid; gap: 6px; }
     .invitation label { color: var(--text-2); font-weight: 650; }
     .code-row { display: flex; align-items: center; gap: 8px; }
     .code-row .input { flex: 1; min-width: 0; }

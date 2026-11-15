@@ -15,10 +15,14 @@
     let audio = $state<HTMLAudioElement>();
     let objectUrl = $state<string | null>(null);
     let loadedId = $state("");
+    // Non-reactive: playback messages replace the song object every ~1.2s,
+    // and comparing against loadedId alone restarted slow downloads forever.
+    let requestedId = "";
     let request = 0;
 
     function cleanup() {
         request++;
+        requestedId = "";
         if (audio) {
             analyser.detach(audio);
             audio.pause();
@@ -34,6 +38,7 @@
         cleanup();
         const id = ++request;
         if (!isAndroid || !enabled) return;
+        requestedId = current.id;
         try {
             // persist=true lets Android reuse the downloaded file for the
             // native player and for later visualizer sessions.
@@ -68,7 +73,7 @@
             cleanup();
             return;
         }
-        if (current.id !== loadedId) void load(current);
+        if (current.id !== requestedId) void load(current);
     });
 
     $effect(() => {
@@ -76,7 +81,8 @@
         if (!audio || !loadedId || !current) return;
         if (current.song?.id !== loadedId) return;
         const drift = current.position - audio.currentTime;
-        if (Math.abs(drift) > 0.35) audio.currentTime = Math.max(0, current.position);
+        // Updates arrive every ~1.2s with network delay; only correct real drift.
+        if (Math.abs(drift) > 1) audio.currentTime = Math.max(0, current.position);
         if (current.paused) audio.pause();
         else if (audio.paused) void audio.play().catch(() => {});
     });

@@ -232,8 +232,8 @@
     </header>
 
     {#if track}
-        {#if peers.remote?.song}
-            <RemoteVisualizerAudio song={track} enabled={mode === "visualizer" || mode === "stage"} />
+        {#if peers.remote?.song && !playerState.currentTrack}
+            <RemoteVisualizerAudio song={peers.remote.song} enabled={mode === "visualizer" || mode === "stage"} />
         {/if}
         {#if mode === "lyrics"}
             <div class="stage" class:no-lyrics={!lyricsState.has && !playerState.isLoading && !playerState.lyricsPending}>

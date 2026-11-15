@@ -68,7 +68,7 @@ class WayshipState {
     diagnostics = $state<string[]>([]);
 
     private log(event: string, details?: unknown) {
-        const line = `${new Date().toLocaleTimeString()} ${event}${details ? ` ${JSON.stringify(details)}` : ''}`;
+        const line = `${new Date().toLocaleTimeString('en-GB', { hour12: false })}.${String(Date.now() % 1000).padStart(3, '0')} ${event}${details ? ` ${JSON.stringify(details)}` : ''}`;
         this.diagnostics = [...this.diagnostics.slice(-39), line];
         console.log(`[wayship] ${line}`);
     }

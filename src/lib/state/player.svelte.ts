@@ -314,6 +314,18 @@ export function playTrack(track: Song) {
     queueMicrotask(refreshAutoplay);
 }
 
+/** Mirror another device's track: no history entry and no local autoplay, since the host decides what plays next. */
+export function mirrorTrack(track: Song) {
+    playerState.currentPlaylist = null;
+    playerState.autoplayTracks = [];
+    playerState.autoplaySeed = null;
+    playerState._order = [];
+    playerState._anchorId = null;
+    playerState._anchorIndex = -1;
+    playerState._fromQueue = false;
+    setCurrent(track);
+}
+
 /**
  * Start playing a playlist.
  *

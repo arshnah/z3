@@ -17,7 +17,8 @@
     const linux = typeof document !== "undefined" && document.documentElement.dataset.os === "linux";
     let maximized = $state(false);
     const wayshipLink = $derived(peers.links.find((link) => !!link.wayshipPeerId));
-    const wayshipStatus = $derived(wayshipLink?.connected ? 'Synced' : wayshipLink ? 'Connecting…' : wayship.connected ? 'Online' : 'Offline');
+    const wayshipState = $derived(wayshipLink?.connected ? 'synced' : wayshipLink ? 'connecting' : wayship.connected ? 'online' : 'offline');
+    const wayshipStatus = $derived({ synced: 'Synced', connecting: 'Connecting…', online: 'Online', offline: 'Offline' }[wayshipState]);
 
     $effect(() => {
         if (typeof document === "undefined") return;
@@ -73,7 +74,7 @@
         <span class="mark">ζ</span>
         <span class="name">Zeta</span>
     </div>
-    <a class="wayship-indicator {wayshipStatus.toLowerCase().replace('…', '')}" href="/music/settings" title={`Wayship: ${wayshipStatus}`} aria-label={`Wayship: ${wayshipStatus}`}>
+    <a class="wayship-indicator {wayshipState}" href="/music/settings" title={`Wayship: ${wayshipStatus}`} aria-label={`Wayship: ${wayshipStatus}`}>
         <Icon name="smartphone" />
         <span class="wayship-label">{wayshipStatus}</span>
     </a>
@@ -161,28 +162,38 @@
     .wayship-indicator {
         margin-left: auto;
         position: relative;
-        display: grid;
-        place-items: center;
-        width: 28px;
-        height: 28px;
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        height: 24px;
+        padding: 0 10px 0 8px;
+        border-radius: 999px;
+        background: rgb(255 255 255 / 0.04);
+        box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.06);
         color: var(--text-2);
+        text-decoration: none;
         -webkit-app-region: no-drag;
+        transition: background 0.2s var(--ease-out), color 0.2s var(--ease-out);
     }
-    .wayship-indicator:hover { color: var(--text); }
-    .wayship-indicator :global(svg) { width: 15px; height: 15px; }
+    .wayship-indicator:hover { color: var(--text); background: rgb(255 255 255 / 0.08); }
+    .wayship-indicator :global(svg) { width: 13px; height: 13px; flex: none; }
     .wayship-indicator.synced { color: #34d399; }
     .wayship-indicator.connecting { color: #fbbf24; }
+    .wayship-indicator.online { color: #60a5fa; }
     .wayship-indicator.offline { color: var(--text-3); }
     .wayship-label {
-        font-size: 10px;
+        font-size: 10.5px;
         font-weight: 650;
-        margin-left: 5px;
+        line-height: 1;
+        white-space: nowrap;
     }
     .wayship-indicator.synced::after,
-    .wayship-indicator.connecting::after {
+    .wayship-indicator.connecting::after,
+    .wayship-indicator.online::after {
+        content: "";
         position: absolute;
-        right: 2px;
-        top: 3px;
+        right: -1px;
+        top: -1px;
         width: 6px;
         height: 6px;
         border-radius: 50%;

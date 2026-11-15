@@ -186,7 +186,9 @@
                     >
                         {#if line.words}
                             <!-- `held`: a word sung for a while (a long note) swells as it's sung. -->
-                            {#each line.words as word, wi}{@const held = !line.estimated && (word.end ?? line.words[wi + 1]?.time ?? line.end) - word.time >= 0.9}<span class="word" class:held class:aside={word.aside} data-w>{word.text}</span>{/each}
+                            <!-- Spaces stay outside the word block: inside it, scaling/lifting a
+                                 word also moved its trailing space and squashed the gap to the next. -->
+                            {#each line.words as word, wi}{@const held = !line.estimated && (word.end ?? line.words[wi + 1]?.time ?? line.end) - word.time >= 0.9}{@const [, lead, core, trail] = /^(\s*)(.*?)(\s*)$/s.exec(word.text) ?? ["", "", word.text, ""]}{lead}<span class="word" class:held class:aside={word.aside} data-w>{core}</span>{trail}{/each}
                         {:else}
                             {line.text}
                         {/if}

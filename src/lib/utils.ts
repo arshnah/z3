@@ -90,15 +90,21 @@ export function plainLyricLines(raw: string | null): string[] {
  * ad-libs like "(I believe)". Brackets can span several pieces, so depth is
  * tracked across them; a piece counts as bracketed when most of its letters are.
  */
+// Lyric sources also use fullwidth, small, super/subscript and ornamental
+// parentheses (e.g. "（yeah）" or "﹙oh﹚") for the same backing-vocal lines.
+const OPEN_BRACKETS = new Set(['(', '（', '﹙', '⁽', '₍', '❨', '❪', '⟮', '⦅', '⸨', '〔', '〘', '❲', '⦗']);
+const CLOSE_BRACKETS = new Set([')', '）', '﹚', '⁾', '₎', '❩', '❫', '⟯', '⦆', '⸩', '〕', '〙', '❳', '⦘']);
+
 export function bracketedPieces(pieces: string[]): boolean[] {
     let depth = 0;
     return pieces.map((piece) => {
         const startDepth = depth;
         let inside = 0;
         let outside = 0;
+        let opens = false;
         for (const ch of piece) {
-            if (ch === '(') depth++;
-            else if (ch === ')') depth = Math.max(0, depth - 1);
+            if (OPEN_BRACKETS.has(ch)) { depth++; opens = true; }
+            else if (CLOSE_BRACKETS.has(ch)) depth = Math.max(0, depth - 1);
             else if (/[\p{L}\p{N}]/u.test(ch)) {
                 if (depth > 0) inside++;
                 else outside++;
@@ -106,7 +112,7 @@ export function bracketedPieces(pieces: string[]): boolean[] {
         }
         if (inside || outside) return inside > outside;
         // Only punctuation/brackets: go with whichever side it touches.
-        return startDepth > 0 || piece.includes('(');
+        return startDepth > 0 || opens;
     });
 }
 

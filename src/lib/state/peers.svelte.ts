@@ -1,7 +1,7 @@
 import { client } from '$lib/ephaptic';
 import { DISCOVERY_PORT, INVITE_LIFETIME, makeNearbyInvite, openNearbyAnswer, readNearbyInvite, sealNearbyAnswer } from '$lib/nearby-pairing';
 import { createPeer, decodeSignal, acceptPeer, sendPeerBytes, type PeerMode } from '$lib/peer-connection';
-import { addToQueue, nextTrack, previousTrack, playerState, playTrack, setVolume, togglePlay } from './player.svelte';
+import { addToQueue, mirrorTrack, nextTrack, previousTrack, playerState, setVolume, togglePlay } from './player.svelte';
 import { libraryState } from './library.svelte';
 import { artworkState } from './artwork.svelte';
 import { statsState } from './stats.svelte';
@@ -61,9 +61,10 @@ class Peers {
     private timer: ReturnType<typeof setInterval> | undefined;
     private librarySyncTimer: ReturnType<typeof setInterval> | undefined;
     private pendingIce = new Map<string, RTCIceCandidateInit[]>();
+    private syncing = new Set<string>();
 
     private log(event: string, details?: unknown) {
-        const line = `${new Date().toLocaleTimeString()} ${event}${details ? ` ${JSON.stringify(details)}` : ''}`;
+        const line = `${new Date().toLocaleTimeString('en-GB', { hour12: false })}.${String(Date.now() % 1000).padStart(3, '0')} ${event}${details ? ` ${JSON.stringify(details)}` : ''}`;
         this.diagnostics = [...this.diagnostics.slice(-39), line];
         console.log(`[wayship-peer] ${line}`);
     }
@@ -437,9 +438,13 @@ class Peers {
 
     async syncLibrary(id: string, showToast = false) {
         const link = this.links.find((item) => item.id === id && item.connected && item.channel);
-        if (!link?.channel || this.progress !== null) return;
+        // One transfer per ordered channel: never start while this link is
+        // already sending or receiving, or the two byte streams interleave.
+        if (!link?.channel || this.progress !== null || this.syncing.has(id) || this.incoming?.id === id) return;
+        this.syncing.add(id);
         try {
             const { bytes } = await client.zetaBackupBytes(false);
+            if (link.channel.readyState !== 'open' || this.incoming?.id === id) return;
             const data = Uint8Array.from(bytes);
             this.send(link, { type: 'sync-start', size: data.length, digest: await digest(data) });
             await sendPeerBytes(link.channel, data, () => {});
@@ -447,6 +452,8 @@ class Peers {
             if (showToast) toasts.success('Synced stats, playlists, and favourites with paired device.');
         } catch (error) {
             if (showToast) toasts.error(error);
+        } finally {
+            this.syncing.delete(id);
         }
     }
 
@@ -561,7 +568,9 @@ class Peers {
             volume: Number.isFinite(message.volume) ? Math.min(1, Math.max(0, message.volume)) : playerState.volume,
             queue: Array.isArray(message.queue) ? message.queue.filter((title: unknown) => typeof title === 'string').slice(0, 25) : [],
         };
-        if (song && song.id !== previousSongId) void artworkState.refresh(song);
+        // Only theme from the remote track when nothing is playing locally;
+        // otherwise a guest's own song would get the host's colours.
+        if (song && song.id !== previousSongId && !playerState.currentTrack) void artworkState.update(song);
         // Wayship remote links mirror the host just like listening-party links.
         // The old check only handled `party`, so a successfully connected
         // Wayship phone received playback messages but never applied them.
@@ -576,7 +585,7 @@ class Peers {
                 playerState.paused = true;
                 return;
             }
-            if (playerState.currentTrack?.id !== song.id) playTrack(song);
+            if (playerState.currentTrack?.id !== song.id) mirrorTrack(song);
             if (!playerState.isLoading && playerState.stream) {
                 if (Math.abs(playerState.currentTime - message.position) > 2) playerState.currentTime = message.position;
                 playerState.paused = !!message.paused;
