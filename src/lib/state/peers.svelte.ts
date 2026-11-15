@@ -32,9 +32,17 @@ function wireSong(input: unknown, remote = false): Song | null {
     if (!song || typeof song.id !== 'string' || typeof song.title !== 'string' || !Array.isArray(song.artists)) return null;
     if (remote && !/^yt:[\w-]{11}$|^js:[\w-]{1,64}$/.test(song.id)) return null;
     if (!/^(yt|js|local|fs):/.test(song.id) || song.id.length > 1024) return null;
+    const thumbnails = (Array.isArray(song.thumbnails) ? song.thumbnails : [])
+        .filter((thumb) => typeof thumb?.url === 'string' && /^https?:\/\//i.test(thumb.url))
+        .map(({ url, width, height }) => ({ url, width, height }))
+        .slice(0, 4);
+    // Downloaded songs often only carry a device-local zeta-cover:// image,
+    // which the other device can't load. Fall back to YouTube's thumbnail.
+    const video = /^yt:([\w-]{11})$/.exec(song.id)?.[1];
+    if (!thumbnails.length && video) thumbnails.push({ url: `https://i.ytimg.com/vi/${video}/hqdefault.jpg`, width: 480, height: 360 });
     return {
         id: song.id, title: song.title.slice(0, 300),
-        thumbnails: song.thumbnails.filter((thumb) => typeof thumb?.url === 'string' && /^https?:\/\//i.test(thumb.url)).slice(0, 4),
+        thumbnails,
         artists: song.artists.slice(0, 8).flatMap((artist) => typeof artist?.name === 'string'
             ? [{ name: artist.name.slice(0, 120), thumbnails: [] }] : []),
         duration: Number.isFinite(song.duration) ? Math.max(0, song.duration) : 0,
@@ -568,9 +576,11 @@ class Peers {
             volume: Number.isFinite(message.volume) ? Math.min(1, Math.max(0, message.volume)) : playerState.volume,
             queue: Array.isArray(message.queue) ? message.queue.filter((title: unknown) => typeof title === 'string').slice(0, 25) : [],
         };
-        // Only theme from the remote track when nothing is playing locally;
-        // otherwise a guest's own song would get the host's colours.
-        if (song && song.id !== previousSongId && !playerState.currentTrack) void artworkState.update(song);
+        // refresh() (not update()) so a track this device already loaded with
+        // missing artwork gets it again. Skipped when the guest is showing its
+        // own unrelated song, which would otherwise take the host's colours.
+        const shown = !playerState.currentTrack || this.following || playerState.currentTrack.id === song?.id;
+        if (song && song.id !== previousSongId && shown) void artworkState.refresh(song);
         // Wayship remote links mirror the host just like listening-party links.
         // The old check only handled `party`, so a successfully connected
         // Wayship phone received playback messages but never applied them.
