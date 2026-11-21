@@ -220,8 +220,29 @@ class WayshipState {
         this.log('announce', { self: this.peerId, peers: this.onlinePeers.map((peer) => ({ id: peer.peer_id, name: peer.device_name })) });
         if (out.ice_servers?.length) this.iceServers = out.ice_servers;
 
-        // Discovery is passive; the user chooses which device to connect.
-        this.autoConnectedPeers.clear();
+        this.autoConnect();
+    }
+
+    /**
+     * Link up with every Zeta device that is online on this Wayship account,
+     * so opening the app on a second device connects without any clicks.
+     * Only the device with the smaller peer id sends the offer. That matches
+     * the tie-breaker in peers.handleWayshipSignal, so two apps opening at the
+     * same time never send competing offers. Runs on every announce (~28s),
+     * which also retries links that timed out or dropped.
+     */
+    private autoConnect() {
+        if (!this.token.startsWith('wsa_')) return;
+        for (const peer of this.onlinePeers) {
+            if (this.peerId >= peer.peer_id) continue;
+            if (peers.links.some((link) => link.wayshipPeerId === peer.peer_id)) continue;
+            this.autoConnectedPeers.add(peer.peer_id);
+            this.log('auto-connect', { local: this.peerId, remote: peer.peer_id });
+            void this.connectPeer(peer.peer_id, 'remote').catch((error) => {
+                this.autoConnectedPeers.delete(peer.peer_id);
+                this.log('auto-connect failed', { remote: peer.peer_id, error: String(error) });
+            });
+        }
     }
 
     private async poll() {
@@ -261,6 +282,9 @@ class WayshipState {
                         updated_at: ev.ts || Date.now(),
                     },
                 ];
+                // A device that just opened Zeta links up right away instead of
+                // waiting up to ~28s for the next announce.
+                this.autoConnect();
             }
             return;
         }

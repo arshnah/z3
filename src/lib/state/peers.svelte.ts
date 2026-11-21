@@ -1,7 +1,7 @@
 import { client } from '$lib/ephaptic';
 import { DISCOVERY_PORT, INVITE_LIFETIME, makeNearbyInvite, openNearbyAnswer, readNearbyInvite, sealNearbyAnswer } from '$lib/nearby-pairing';
 import { createPeer, decodeSignal, acceptPeer, sendPeerBytes, type PeerMode } from '$lib/peer-connection';
-import { addToQueue, mirrorTrack, nextTrack, previousTrack, playerState, setVolume, togglePlay } from './player.svelte';
+import { addToQueue, mirrorTrack, nextTrack, previousTrack, playerState, setRemoteControl, setVolume, togglePlay } from './player.svelte';
 import { libraryState } from './library.svelte';
 import { artworkState } from './artwork.svelte';
 import { statsState } from './stats.svelte';
@@ -70,6 +70,19 @@ class Peers {
     private librarySyncTimer: ReturnType<typeof setInterval> | undefined;
     private pendingIce = new Map<string, RTCIceCandidateInit[]>();
     private syncing = new Set<string>();
+
+    constructor() {
+        // A guest that isn't playing out loud acts as a remote control. Its play/pause,
+        // next/previous, seek and volume controls (UI buttons, media keys and the
+        // Android notification) go to the device that is playing.
+        setRemoteControl((command, value) => {
+            if (this.following) return false;
+            const link = this.links.find((item) => !item.host && item.connected && item.mode === 'remote');
+            if (!link) return false;
+            this.send(link, { type: 'command', command, value });
+            return true;
+        });
+    }
 
     private log(event: string, details?: unknown) {
         const line = `${new Date().toLocaleTimeString('en-GB', { hour12: false })}.${String(Date.now() % 1000).padStart(3, '0')} ${event}${details ? ` ${JSON.stringify(details)}` : ''}`;
@@ -140,7 +153,16 @@ class Peers {
             this.links = this.links.map((item) => item.id === link.id ? { ...item, connected: true, connectTimeout: undefined } : item);
             this.closeListener(link.id);
             if (this.pending?.id === link.id) this.pending = null;
-            if (!link.host && link.mode === 'remote') this.following = true;
+            // A new link syncs the song and position but leaves the sound on the
+            // device that was already playing. The guest starts as a remote
+            // control and only plays out loud after an explicit takeover.
+            if (!link.host && link.mode === 'remote') {
+                this.following = false;
+                if (playerState.currentTrack && !playerState.paused) {
+                    // Both were playing: keep the host's sound and pause the guest.
+                    playerState.paused = true;
+                }
+            }
             if (link.host && link.mode === 'remote') this.sendPlayback(link);
             if (link.backupAudio !== undefined) {
                 void this.sendBackup(link.id).catch((error) => toasts.error(error));
@@ -579,7 +601,9 @@ class Peers {
         // refresh() (not update()) so a track this device already loaded with
         // missing artwork gets it again. Skipped when the guest is showing its
         // own unrelated song, which would otherwise take the host's colours.
-        const shown = !playerState.currentTrack || this.following || playerState.currentTrack.id === song?.id;
+        // A connected remote guest always shows the host's song now: either it
+        // follows (plays it) or it's a remote control (displays it).
+        const shown = link.mode === 'remote' || !playerState.currentTrack || this.following || playerState.currentTrack.id === song?.id;
         if (song && song.id !== previousSongId && shown) void artworkState.refresh(song);
         // Wayship remote links mirror the host just like listening-party links.
         // The old check only handled `party`, so a successfully connected

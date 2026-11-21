@@ -24,6 +24,7 @@
         isRadioContext,
     } from "$lib/state/player.svelte";
     import { libraryState } from "$lib/state/library.svelte";
+    import { peers } from "$lib/state/peers.svelte";
     import { ui, type MenuItem } from "$lib/state/ui.svelte";
     import { toasts } from "$lib/state/toast.svelte";
     import { trackMenu } from "$lib/actions";
@@ -32,12 +33,23 @@
     import { artistNames, formatTime } from "$lib/utils";
     import { slide } from "svelte/transition";
 
-    const track = $derived(playerState.currentTrack);
-    const fav = $derived(track ? libraryState.isFavourite(track.id) : false);
-    const pct = $derived(playerState.duration ? (playerState.currentTime / playerState.duration) * 100 : 0);
-    const volumeIcon = $derived(
-        playerState.muted || playerState.volume === 0 ? "volume-x" : playerState.volume < 0.4 ? "volume-1" : "volume-2",
+    // A guest acting as a remote control (connected, not playing out loud) shows
+    // and controls the other device's playback. The transport functions route
+    // their commands there through the player's remote-control hook.
+    const remote = $derived(
+        !peers.following && peers.remote?.song && peers.links.some((link) => !link.host && link.connected && link.mode === "remote")
+            ? peers.remote
+            : null,
     );
+    const track = $derived(remote?.song ?? playerState.currentTrack);
+    const paused = $derived(remote ? remote.paused : playerState.paused);
+    const time = $derived(remote ? remote.position : playerState.currentTime);
+    const duration = $derived(remote ? remote.duration : playerState.duration);
+    const volume = $derived(remote ? remote.volume : playerState.muted ? 0 : playerState.volume);
+    const loading = $derived(!remote && playerState.isLoading);
+    const fav = $derived(track ? libraryState.isFavourite(track.id) : false);
+    const pct = $derived(duration ? (time / duration) * 100 : 0);
+    const volumeIcon = $derived(volume === 0 ? "volume-x" : volume < 0.4 ? "volume-1" : "volume-2");
 
     let glowEl = $state<HTMLDivElement>();
     let capsuleEl = $state<HTMLDivElement>();
@@ -108,7 +120,8 @@
     class="capsule"
     class:expanded
     class:empty={!track}
-    class:playing={track && !playerState.paused}
+    class:playing={track && !paused}
+    class:remote={!!remote}
     bind:this={capsuleEl}
     onmouseenter={enter}
     onmouseleave={leave}
@@ -138,7 +151,7 @@
             >
                 {#key track.id}
                     <span class="title ellipsis" title={track.title}>{track.title}</span>
-                    {#if !ui.lite && !expanded && lyricsState.synced && !playerState.paused}
+                    {#if !ui.lite && !expanded && !remote && lyricsState.synced && !paused}
                         <span class="ticker"><LyricText /></span>
                     {:else}
                     <span class="artist ellipsis">
@@ -159,22 +172,22 @@
             {#if expanded}
                 <button class="icon-btn" title="Previous" onclick={previousTrack}><Icon name="skip-back" /></button>
             {/if}
-            <button class="play" title="Play/Pause (Space)" disabled={playerState.isLoading} onclick={togglePlay}>
-                {#if playerState.isLoading}
+            <button class="play" title={remote ? `Play/Pause on ${peers.links.find((link) => !link.host && link.connected)?.deviceName || "other device"}` : "Play/Pause (Space)"} disabled={loading} onclick={togglePlay}>
+                {#if loading}
                     <span class="spin"><Icon name="loader-circle" /></span>
                 {:else}
-                    <Icon name={playerState.paused ? "play" : "pause"} />
+                    <Icon name={paused ? "play" : "pause"} />
                 {/if}
             </button>
-            <button class="icon-btn" title="Next" disabled={!isNextTrackAvailable()} onclick={nextTrack}><Icon name="skip-forward" /></button>
+            <button class="icon-btn" title="Next" disabled={!remote && !isNextTrackAvailable()} onclick={nextTrack}><Icon name="skip-forward" /></button>
         </div>
 
         {#if expanded}
             <div class="more" transition:slide={{ duration: ui.lite ? 120 : 260 }}>
                 <div class="seek">
-                    <span class="time">{formatTime(playerState.currentTime)}</span>
-                    <Slider value={playerState.currentTime} max={playerState.duration || 0} onchange={seek} format={formatTime} disabled={!playerState.duration} label="Seek" />
-                    <span class="time">{formatTime(playerState.duration || track.duration || 0)}</span>
+                    <span class="time">{formatTime(time)}</span>
+                    <Slider value={time} max={duration || 0} onchange={seek} format={formatTime} disabled={!duration} label="Seek" />
+                    <span class="time">{formatTime(duration || track.duration || 0)}</span>
                 </div>
                 <div class="tools">
                     <div class="group">
@@ -195,7 +208,7 @@
                     </div>
                     <div class="group vol">
                         <button class="icon-btn sm" title="Mute (M)" onclick={toggleMute}><Icon name={volumeIcon} /></button>
-                        <Slider value={playerState.muted ? 0 : playerState.volume} max={1} live onchange={setVolume} format={(v) => `${Math.round(v * 100)}%`} label="Volume" />
+                        <Slider value={volume} max={1} live onchange={setVolume} format={(v) => `${Math.round(v * 100)}%`} label="Volume" />
                         <button class="icon-btn sm" class:on={pinned} title={pinned ? "Unpin" : "Keep expanded"} onclick={() => (pinned = !pinned)}>
                             <Icon name={pinned ? "pin-off" : "pin"} />
                         </button>

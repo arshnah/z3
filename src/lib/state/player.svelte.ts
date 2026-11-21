@@ -362,7 +362,21 @@ export function playPlaylist(playlist: Playlist, startIndex?: number, shuffleFla
     setCurrent(start);
 }
 
+/**
+ * When this device is a remote control for another one (a Wayship guest that
+ * isn't playing out loud), transport controls go to that device instead of the
+ * local player. peers.svelte.ts installs the handler, which returns true when it
+ * handled the command. It's a hook rather than an import to avoid a cycle.
+ */
+type RemoteCommand = 'toggle' | 'next' | 'previous' | 'seek' | 'volume';
+let remoteControl: ((command: RemoteCommand, value?: number) => boolean) | null = null;
+
+export function setRemoteControl(handler: ((command: RemoteCommand, value?: number) => boolean) | null) {
+    remoteControl = handler;
+}
+
 export function nextTrack() {
+    if (remoteControl?.('next')) return;
     syncShuffledOrder();
 
     if (playerState.upNext.length) {
@@ -546,6 +560,7 @@ export function handleTrackEnded() {
 }
 
 export function previousTrack() {
+    if (remoteControl?.('previous')) return;
     // Like every other player: a few seconds in, "previous" restarts the song.
     if ((playerState.currentTime || 0) > 3) {
         playerState.currentTime = 0;
@@ -615,11 +630,13 @@ export function cycleRepeat() {
 }
 
 export function togglePlay() {
+    if (remoteControl?.('toggle')) return;
     if (!playerState.currentTrack || playerState.isLoading) return;
     playerState.paused = !playerState.paused;
 }
 
 export function seek(seconds: number) {
+    if (remoteControl?.('seek', Math.max(0, seconds))) return;
     const max = playerState.duration || 0;
     playerState.currentTime = Math.min(Math.max(0, seconds), max);
 }
@@ -629,6 +646,7 @@ export function seekBy(delta: number) {
 }
 
 export function setVolume(volume: number) {
+    if (remoteControl?.('volume', Math.min(1, Math.max(0, volume)))) return;
     playerState.volume = Math.min(1, Math.max(0, volume));
     if (playerState.volume > 0) playerState.muted = false;
     savePlayerPrefs();

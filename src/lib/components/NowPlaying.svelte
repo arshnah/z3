@@ -37,7 +37,12 @@
     // A connected guest can show the remote track even when this device is
     // not the playback target. This keeps the visualizer/lyrics surface alive
     // without starting a second local audio player.
-    const track = $derived(playerState.currentTrack ?? peers.remote?.song ?? null);
+    // A guest acting as a remote control (connected, not playing out loud)
+    // shows the other device's song even if it still has its own paused track.
+    const remoteControl = $derived(
+        !peers.following && !!peers.remote?.song && peers.links.some((link) => !link.host && link.connected && link.mode === "remote"),
+    );
+    const track = $derived((remoteControl ? peers.remote?.song : playerState.currentTrack) ?? peers.remote?.song ?? null);
     const fav = $derived(track ? libraryState.isFavourite(track.id) : false);
     const mode = $derived(ui.nowPlayingMode);
     const pack = $derived(VISUALIZER_PACKS.find((p) => p.id === ui.visualizerPack) ?? VISUALIZER_PACKS[0]);
@@ -76,7 +81,7 @@
     // A guest can render a remote track without loading it into the native
     // playback player. Keep its palette and background artwork in sync too.
     $effect(() => {
-        if (!playerState.currentTrack) void artworkState.update(peers.remote?.song ?? null);
+        if (remoteControl || !playerState.currentTrack) void artworkState.update(peers.remote?.song ?? null);
     });
 
     function setPack(id: string) {
@@ -232,7 +237,7 @@
     </header>
 
     {#if track}
-        {#if peers.remote?.song && !playerState.currentTrack}
+        {#if peers.remote?.song && (remoteControl || !playerState.currentTrack)}
             <RemoteVisualizerAudio song={peers.remote.song} enabled={mode === "visualizer" || mode === "stage"} />
         {/if}
         {#if mode === "lyrics"}

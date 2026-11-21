@@ -391,7 +391,9 @@
                 playerState.paused = true;
                 break;
             case "playpause":
-                if (track) playerState.paused = !playerState.paused;
+                // Through togglePlay so a guest acting as a remote control
+                // forwards media keys to the device that is playing.
+                togglePlay();
                 break;
             case "stop":
                 playerState.paused = true;
