@@ -22,10 +22,14 @@
 
     // Pause decorative animations while the window isn't visible.
     onMount(() => {
-        const sync = () => document.documentElement.setAttribute("data-idle", String(document.hidden));
+        const root = document.documentElement;
+        const sync = () => root.setAttribute("data-idle", String(document.hidden));
         sync();
         document.addEventListener("visibilitychange", sync);
-        return () => document.removeEventListener("visibilitychange", sync);
+        return () => {
+            document.removeEventListener("visibilitychange", sync);
+            root.removeAttribute("data-idle");
+        };
     });
 
     // Each page starts at the top.
