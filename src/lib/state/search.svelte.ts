@@ -47,6 +47,7 @@ class SearchStore {
         if (!q) return;
         this.query = q;
         this.error = "";
+        this.offline = false;
         this.videos = [];
         this.videosError = "";
         this.videosLoading = false;
